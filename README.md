@@ -29,8 +29,6 @@ i2c_address: 112
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
 tca9548a_channel: 0
-i2c_mcu: mmu
-i2c_bus: i2c2_PB10_PB11
 i2c_address: 56
 min_temp: -20
 max_temp: 80
@@ -39,8 +37,6 @@ max_temp: 80
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
 tca9548a_channel: 1
-i2c_mcu: mmu
-i2c_bus: i2c2_PB10_PB11
 i2c_address: 56
 min_temp: -20
 max_temp: 80
@@ -49,8 +45,6 @@ max_temp: 80
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
 tca9548a_channel: 2
-i2c_mcu: mmu
-i2c_bus: i2c2_PB10_PB11
 i2c_address: 56
 min_temp: -20
 max_temp: 80
@@ -59,8 +53,6 @@ max_temp: 80
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
 tca9548a_channel: 3
-i2c_mcu: mmu
-i2c_bus: i2c2_PB10_PB11
 i2c_address: 56
 min_temp: -20
 max_temp: 80
@@ -69,8 +61,6 @@ max_temp: 80
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
 tca9548a_channel: 4
-i2c_mcu: mmu
-i2c_bus: i2c2_PB10_PB11
 i2c_address: 56
 min_temp: -20
 max_temp: 80
@@ -81,10 +71,13 @@ separate `[tca9548a]` section is not required. Put the mux section before any
 `[temperature_sensor]` section that uses `sensor_type: AHT2X_TCA9548A`.
 
 Use the Klipper MCU name and I2C bus name for your board in `i2c_mcu` and
-`i2c_bus`. The example uses `mmu` and `i2c2_PB10_PB11`. If your TCA9548A has
-A0/A1/A2 pulled high or low differently, adjust the mux `i2c_address` from the
-default `112` (`0x70`). Klipper expects I2C addresses in decimal, so AHT20's
-`0x38` address is written as `56`.
+`i2c_bus` on the `[tca9548a mux1]` section. Sensors using that mux inherit
+`i2c_mcu`, `i2c_bus`, and `i2c_speed` from the mux unless they override those
+options. The example uses `mmu` and `i2c2_PB10_PB11`.
+
+If your TCA9548A has A0/A1/A2 pulled high or low differently, adjust the mux
+`i2c_address` from the default `112` (`0x70`). Klipper expects I2C addresses in
+decimal. AHT20's `0x38` address is written as `56` in each sensor section.
 
 ## Notes
 

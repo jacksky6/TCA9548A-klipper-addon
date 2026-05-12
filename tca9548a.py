@@ -7,6 +7,37 @@ import logging
 from . import aht10, bus
 
 TCA9548A_I2C_ADDR = 0x70
+INHERITED_I2C_OPTIONS = set([
+    "i2c_mcu", "i2c_bus", "i2c_speed",
+    "i2c_software_scl_pin", "i2c_software_sda_pin",
+])
+
+
+def _has_option(config, option):
+    return config.fileconfig.has_option(config.get_name(), option)
+
+
+class MuxedSensorConfig:
+    def __init__(self, sensor_config, mux_config):
+        self.sensor_config = sensor_config
+        self.mux_config = mux_config
+
+    def __getattr__(self, name):
+        return getattr(self.sensor_config, name)
+
+    def _get_config_for_option(self, option):
+        if option in INHERITED_I2C_OPTIONS and not _has_option(
+                self.sensor_config, option):
+            return self.mux_config
+        return self.sensor_config
+
+    def get(self, option, *args, **kwargs):
+        return self._get_config_for_option(option).get(option, *args,
+                                                       **kwargs)
+
+    def getint(self, option, *args, **kwargs):
+        return self._get_config_for_option(option).getint(option, *args,
+                                                          **kwargs)
 
 
 class TCA9548A:
@@ -91,7 +122,9 @@ class AHT2xTCA9548A(aht10.AHT2x):
             raise config.error("Section '%s' must be defined" % (
                 mux_section,))
         mux = config.get_printer().load_object(config, mux_section)
-        super(AHT2xTCA9548A, self).__init__(config)
+        mux_config = config.getsection(mux_section)
+        super(AHT2xTCA9548A, self).__init__(
+            MuxedSensorConfig(config, mux_config))
         self._mux = mux
         self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
         logging.info("%s %s: using TCA9548A '%s' channel %d",
