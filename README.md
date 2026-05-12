@@ -23,7 +23,7 @@ Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
 [tca9548a mux1]
 i2c_mcu: mmu
 i2c_bus: i2c2_PB10_PB11
-i2c_address: 112
+i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
