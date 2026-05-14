@@ -56,12 +56,16 @@ class TCA9548A:
                                             minval=0, maxval=127)
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000)
+        self.write_i2c = bus.MCU_I2C_from_config(
+            config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000,
+            async_write_only=True)
         self.mutex = self.reactor.mutex()
         logging.info("TCA9548A '%s': configured on mcu '%s', bus '%s', "
                      "address %d",
                      self.name, self.config_mcu, self.config_bus,
                      self.config_address)
         self.last_channel = None
+        self.last_control = None
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
         gcode = self.printer.lookup_object("gcode")
@@ -77,15 +81,20 @@ class TCA9548A:
             self.disable_all()
 
     def _write_control_locked(self, value):
-        if getattr(self.i2c, "i2c_transfer_cmd", None) is not None:
-            if self.i2c.i2c_transfer([value], read_len=0) is None:
-                return False
-        else:
+        if self.last_control == value:
+            return True
+        if self.verify_select:
             self.i2c.i2c_write([value])
+        else:
+            self.write_i2c.i2c_write([value])
         if self.select_delay:
             self.reactor.pause(self.reactor.monotonic() + self.select_delay)
         if self.verify_select:
-            return self._read_control_locked() == value
+            if self._read_control_locked() != value:
+                return False
+        self.last_control = value
+        if value == 0:
+            self.last_channel = None
         return True
 
     def _write_control(self, value):
@@ -103,10 +112,15 @@ class TCA9548A:
 
     def _read_control(self):
         with self.mutex:
-            return self._read_control_locked()
+            value = self._read_control_locked()
+            self.last_control = value
+            return value
 
     def _select_channel_locked(self, channel):
-        if not self._write_control_locked(1 << channel):
+        value = 1 << channel
+        if self.last_channel == channel:
+            return True
+        if not self._write_control_locked(value):
             return False
         self.last_channel = channel
         return True
@@ -117,6 +131,8 @@ class TCA9548A:
 
     def disable_all(self):
         with self.mutex:
+            if self.last_channel is None:
+                return True
             if not self._write_control_locked(0x00):
                 return False
             self.last_channel = None
