@@ -43,27 +43,123 @@ class MuxedSensorConfig:
 class TCA9548A:
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
         self.name = config.get_name().split()[-1]
+        self.debug_no_disable = config.getboolean("debug_no_disable", False)
+        self.select_delay = config.getfloat("select_delay", 0.,
+                                            minval=0.)
+        self.verify_select = config.getboolean("verify_select", False)
+        self.config_mcu = config.get("i2c_mcu", "mcu")
+        self.config_bus = config.get("i2c_bus", None)
+        self.config_address = config.getint("i2c_address",
+                                            TCA9548A_I2C_ADDR,
+                                            minval=0, maxval=127)
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000)
+        self.mutex = self.reactor.mutex()
+        logging.info("TCA9548A '%s': configured on mcu '%s', bus '%s', "
+                     "address %d",
+                     self.name, self.config_mcu, self.config_bus,
+                     self.config_address)
         self.last_channel = None
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
+        gcode = self.printer.lookup_object("gcode")
+        gcode.register_mux_command("TCA_SELECT", "MUX", self.name,
+                                   self.cmd_TCA_SELECT,
+                                   desc=self.cmd_TCA_SELECT_help)
+        gcode.register_mux_command("TCA_STATUS", "MUX", self.name,
+                                   self.cmd_TCA_STATUS,
+                                   desc=self.cmd_TCA_STATUS_help)
 
     def _handle_connect(self):
-        self.disable_all()
+        if not self.debug_no_disable:
+            self.disable_all()
+
+    def _write_control_locked(self, value):
+        if getattr(self.i2c, "i2c_transfer_cmd", None) is not None:
+            if self.i2c.i2c_transfer([value], read_len=0) is None:
+                return False
+        else:
+            self.i2c.i2c_write([value])
+        if self.select_delay:
+            self.reactor.pause(self.reactor.monotonic() + self.select_delay)
+        if self.verify_select:
+            return self._read_control_locked() == value
+        return True
+
+    def _write_control(self, value):
+        with self.mutex:
+            return self._write_control_locked(value)
+
+    def _read_control_locked(self):
+        params = self.i2c.i2c_read([], 1)
+        if params is None:
+            return None
+        response = params.get("response")
+        if not response:
+            return None
+        return response[0]
+
+    def _read_control(self):
+        with self.mutex:
+            return self._read_control_locked()
+
+    def _select_channel_locked(self, channel):
+        if not self._write_control_locked(1 << channel):
+            return False
+        self.last_channel = channel
+        return True
 
     def select_channel(self, channel):
-        value = 1 << channel
-        self.i2c.i2c_write([value])
-        self.last_channel = channel
+        with self.mutex:
+            return self._select_channel_locked(channel)
 
     def disable_all(self):
-        self.i2c.i2c_write([0x00])
-        self.last_channel = None
+        with self.mutex:
+            if not self._write_control_locked(0x00):
+                return False
+            self.last_channel = None
+            return True
 
     def get_status(self, eventtime):
-        return {"channel": self.last_channel}
+        return {
+            "channel": self.last_channel,
+            "i2c_mcu": self.config_mcu,
+            "i2c_bus": self.config_bus,
+            "i2c_address": self.config_address,
+        }
+
+    cmd_TCA_SELECT_help = "Select or disable a TCA9548A mux channel"
+    def cmd_TCA_SELECT(self, gcmd):
+        channel = gcmd.get_int("CHANNEL", None, minval=0, maxval=7)
+        if channel is None:
+            if not self.disable_all():
+                return
+            gcmd.respond_info("TCA9548A '%s': all channels disabled" % (
+                self.name,))
+            return
+        if not self.select_channel(channel):
+            return
+        gcmd.respond_info("TCA9548A '%s': selected channel %d" % (
+            self.name, channel))
+
+    cmd_TCA_STATUS_help = "Read the TCA9548A mux control register"
+    def cmd_TCA_STATUS(self, gcmd):
+        value = self._read_control()
+        if value is None:
+            return
+        self.last_channel = None
+        channels = []
+        for channel in range(8):
+            if value & (1 << channel):
+                channels.append(str(channel))
+        if len(channels) == 1:
+            self.last_channel = int(channels[0])
+        channel_text = ",".join(channels) if channels else "none"
+        gcmd.respond_info(
+            "TCA9548A '%s': control=0x%02x active_channels=%s" % (
+                self.name, value, channel_text))
 
 
 class MuxedI2C:
@@ -74,6 +170,9 @@ class MuxedI2C:
 
     def _select(self):
         self.mux.select_channel(self.channel)
+
+    def _select_locked(self):
+        self.mux._select_channel_locked(self.channel)
 
     def get_oid(self):
         return self.i2c.get_oid()
@@ -88,25 +187,29 @@ class MuxedI2C:
         return self.i2c.get_command_queue()
 
     def i2c_write_noack(self, data, minclock=0, reqclock=0):
-        self._select()
-        return self.i2c.i2c_write_noack(data, minclock=minclock,
-                                        reqclock=reqclock)
+        with self.mux.mutex:
+            self._select_locked()
+            return self.i2c.i2c_write_noack(data, minclock=minclock,
+                                            reqclock=reqclock)
 
     def i2c_write(self, data, minclock=0, reqclock=0, retry=True):
-        self._select()
-        return self.i2c.i2c_write(data, minclock=minclock, reqclock=reqclock,
-                                  retry=retry)
+        with self.mux.mutex:
+            self._select_locked()
+            return self.i2c.i2c_write(data, minclock=minclock,
+                                      reqclock=reqclock)
 
     def i2c_read(self, write, read_len, retry=True):
-        self._select()
-        return self.i2c.i2c_read(write, read_len, retry=retry)
+        with self.mux.mutex:
+            self._select_locked()
+            return self.i2c.i2c_read(write, read_len, retry=retry)
 
     def i2c_transfer(self, write, read_len=0, minclock=0, reqclock=0,
                      retry=True):
-        self._select()
-        return self.i2c.i2c_transfer(write, read_len=read_len,
-                                     minclock=minclock, reqclock=reqclock,
-                                     retry=retry)
+        with self.mux.mutex:
+            self._select_locked()
+            return self.i2c.i2c_transfer(write, read_len=read_len,
+                                         minclock=minclock, reqclock=reqclock,
+                                         retry=retry)
 
 
 class AHT2xTCA9548A(aht10.AHT2x):
@@ -116,6 +219,8 @@ class AHT2xTCA9548A(aht10.AHT2x):
         self._mux = None
         self._mux_channel = config.getint("tca9548a_channel", minval=0,
                                           maxval=7)
+        self._debug_skip_init = config.getboolean("debug_skip_init", False)
+        self._status_patched = False
         mux_name = config.get("tca9548a")
         mux_section = "tca9548a %s" % (mux_name,)
         if not config.has_section(mux_section):
@@ -129,6 +234,35 @@ class AHT2xTCA9548A(aht10.AHT2x):
         self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
         logging.info("%s %s: using TCA9548A '%s' channel %d",
                      self.model, self.name, mux_name, self._mux_channel)
+
+    def handle_connect(self):
+        self._patch_temperature_sensor_status()
+        if self._debug_skip_init:
+            logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
+                         self.model, self.name)
+            return
+        super(AHT2xTCA9548A, self).handle_connect()
+
+    def _patch_temperature_sensor_status(self):
+        if self._status_patched:
+            return
+        tsensor_name = "temperature_sensor %s" % (self.name,)
+        tsensor = self.printer.lookup_object(tsensor_name, None)
+        if tsensor is None:
+            return
+        original_get_status = tsensor.get_status
+        sensor = self
+
+        def get_status_with_environment(eventtime):
+            status = original_get_status(eventtime)
+            status["humidity"] = sensor.humidity
+            status["tca9548a_channel"] = sensor._mux_channel
+            return status
+
+        tsensor.get_status = get_status_with_environment
+        self._status_patched = True
+        logging.info("%s %s: exposed humidity on '%s'",
+                     self.model, self.name, tsensor_name)
 
     def get_status(self, eventtime):
         status = super(AHT2xTCA9548A, self).get_status(eventtime)

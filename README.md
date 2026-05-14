@@ -24,6 +24,7 @@ Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
 i2c_mcu: mmu
 i2c_bus: i2c2_PB10_PB11
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
+# debug_no_disable: True
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
@@ -32,6 +33,7 @@ tca9548a_channel: 0
 i2c_address: 56
 min_temp: -20
 max_temp: 80
+# debug_skip_init: True
 
 [temperature_sensor Lane_1]
 sensor_type: AHT2X_TCA9548A
@@ -78,6 +80,37 @@ options. The example uses `mmu` and `i2c2_PB10_PB11`.
 If your TCA9548A has A0/A1/A2 pulled high or low differently, adjust the mux
 `i2c_address` from the default `112` (`0x70`). Klipper expects I2C addresses in
 decimal. AHT20's `0x38` address is written as `56` in each sensor section.
+
+## Debug
+
+For mux-only testing, enable:
+
+```ini
+[tca9548a mux1]
+debug_no_disable: True
+# select_delay: 0.01
+# verify_select: True
+
+[temperature_sensor Lane_0]
+debug_skip_init: True
+```
+
+This prevents startup from automatically writing to the mux or initializing the
+AHT2X sensor. After Klipper reaches ready state, manually test the mux with:
+
+```gcode
+TCA_SELECT MUX=mux1 CHANNEL=0
+TCA_STATUS MUX=mux1
+TCA_SELECT MUX=mux1
+```
+
+The first command selects channel 0. `TCA_STATUS` reads back the TCA9548A
+control register. The last command disables all channels.
+
+`select_delay` waits after each mux write. It defaults to `0`, because the
+TCA9548A normally does not need a command processing delay. `verify_select`
+reads the control register after each write and only reports success if the
+read-back byte matches the requested channel mask.
 
 ## Notes
 
