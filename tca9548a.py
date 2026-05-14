@@ -80,6 +80,9 @@ class TCA9548A:
                      self.config_address)
         self.last_channel = None
         self.last_control = None
+        self.environment_sensors = []
+        self.environment_schedule = {}
+        self.environment_schedule_ready = False
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
         gcode = self.printer.lookup_object("gcode")
@@ -93,6 +96,40 @@ class TCA9548A:
     def _handle_connect(self):
         if not self.debug_no_disable:
             self.disable_all()
+        self._build_environment_schedule()
+
+    def register_environment_sensor(self, sensor, channel):
+        self.environment_sensors.append((channel, sensor.name, sensor))
+        self.environment_schedule_ready = False
+
+    def _build_environment_schedule(self):
+        if self.environment_schedule_ready:
+            return
+        self.environment_schedule.clear()
+        sensors = sorted(self.environment_sensors, key=lambda s: (s[0], s[1]))
+        sensor_count = len(sensors)
+        if not sensor_count:
+            logging.info("TCA9548A '%s': environment scheduler disabled "
+                         "(no registered sensors)", self.name)
+            self.environment_schedule_ready = True
+            return
+        slot_width = self.environment_report_time / float(sensor_count)
+        logging.info("TCA9548A '%s': environment scheduler report_time=%ds "
+                     "sensors=%d slot_width=%.3fs",
+                     self.name, self.environment_report_time, sensor_count,
+                     slot_width)
+        for index, (channel, sensor_name, sensor) in enumerate(sensors):
+            offset = slot_width * (index + 1)
+            self.environment_schedule[sensor] = offset
+            logging.info("TCA9548A '%s': environment schedule %s channel=%d "
+                         "initial_delay=%.3fs",
+                         self.name, sensor_name, channel, offset)
+        self.environment_schedule_ready = True
+
+    def get_environment_waketime(self, sensor):
+        self._build_environment_schedule()
+        offset = self.environment_schedule.get(sensor, 0.)
+        return self.reactor.monotonic() + offset
 
     def _write_control_locked(self, value):
         if self.last_control == value:
@@ -145,7 +182,7 @@ class TCA9548A:
 
     def disable_all(self):
         with self.mutex:
-            if self.last_channel is None:
+            if self.last_control == 0:
                 return True
             if not self._write_control_locked(0x00):
                 return False
@@ -159,6 +196,7 @@ class TCA9548A:
             "i2c_bus": self.config_bus,
             "i2c_address": self.config_address,
             "environment_report_time": self.environment_report_time,
+            "environment_sensor_count": len(self.environment_sensors),
         }
 
     cmd_TCA_SELECT_help = "Select or disable a TCA9548A mux channel"
@@ -266,6 +304,7 @@ class AHTTCA9548AMixin:
             MuxedSensorConfig(config, mux_config))
         self._mux = mux
         self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
+        mux.register_environment_sensor(self, self._mux_channel)
         logging.info("%s %s: using TCA9548A '%s' channel %d",
                      self.model, self.name, mux_name, self._mux_channel)
 
@@ -275,7 +314,9 @@ class AHTTCA9548AMixin:
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)
             return
-        super(AHTTCA9548AMixin, self).handle_connect()
+        self._init_sensor()
+        waketime = self._mux.get_environment_waketime(self)
+        self.reactor.update_timer(self.sample_timer, waketime)
 
     def _patch_temperature_sensor_status(self):
         if self._status_patched:
