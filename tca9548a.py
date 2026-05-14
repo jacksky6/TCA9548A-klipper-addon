@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
-from . import aht10, bus
+from . import aht10, bme280, bus
 
 TCA9548A_I2C_ADDR = 0x70
 INHERITED_I2C_OPTIONS = set([
@@ -357,11 +357,63 @@ class AHT3xTCA9548A(AHTTCA9548AMixin, aht10.AHT3x):
     model = "aht3x_tca9548a"
 
 
+class BME280TCA9548A(bme280.BME280):
+    def __init__(self, config):
+        if _has_option(config, "bme280_report_time"):
+            raise config.error(
+                "%s: bme280_report_time is not supported on TCA9548A BME280 "
+                "sensors; set environment_report_time in the [tca9548a] "
+                "mux section" % (config.get_name(),))
+        self._mux = None
+        self._mux_channel = config.getint("tca9548a_channel", minval=0,
+                                          maxval=7)
+        mux_name = config.get("tca9548a")
+        mux_section = "tca9548a %s" % (mux_name,)
+        if not config.has_section(mux_section):
+            raise config.error("Section '%s' must be defined" % (
+                mux_section,))
+        mux = config.get_printer().load_object(config, mux_section)
+        mux_config = config.getsection(mux_section)
+        super(BME280TCA9548A, self).__init__(
+            MuxedSensorConfig(config, mux_config))
+        self._mux = mux
+        self._report_time = mux.environment_report_time
+        self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
+        mux.register_environment_sensor(self, self._mux_channel)
+        logging.info("bme280_tca9548a %s: using TCA9548A '%s' channel %d",
+                     self.name, mux_name, self._mux_channel)
+
+    def handle_connect(self):
+        self._init_bmxx80()
+        if self.chip_type != 'BME280':
+            self.printer.invoke_shutdown(
+                "BME280_TCA9548A %s detected unsupported chip type %s" % (
+                    self.name, self.chip_type))
+            return
+        waketime = self._mux.get_environment_waketime(self)
+        self.reactor.update_timer(self.sample_timer, waketime)
+
+    def get_report_time_delta(self):
+        return self._report_time
+
+    def _sample_bme280(self, eventtime):
+        result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
+        if result == self.reactor.NEVER:
+            return result
+        return self.reactor.monotonic() + self._report_time
+
+    def get_status(self, eventtime):
+        status = super(BME280TCA9548A, self).get_status(eventtime)
+        status["tca9548a_channel"] = self._mux_channel
+        return status
+
+
 def _register_sensor_factory(config):
     pheaters = config.get_printer().load_object(config, "heaters")
     pheaters.add_sensor_factory("AHT1X_TCA9548A", AHT1xTCA9548A)
     pheaters.add_sensor_factory("AHT2X_TCA9548A", AHT2xTCA9548A)
     pheaters.add_sensor_factory("AHT3X_TCA9548A", AHT3xTCA9548A)
+    pheaters.add_sensor_factory("BME280_TCA9548A", BME280TCA9548A)
 
 
 def load_config(config):

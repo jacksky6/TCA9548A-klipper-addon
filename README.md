@@ -17,12 +17,13 @@ Copy `tca9548a.py` into Klipper's `klippy/extras/` directory:
 
 Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
 
-Supported AHT sensor types:
+Supported sensor types:
 
 ```text
 AHT1X_TCA9548A
 AHT2X_TCA9548A
 AHT3X_TCA9548A
+BME280_TCA9548A
 ```
 
 ## Example
@@ -75,6 +76,14 @@ tca9548a_channel: 4
 i2c_address: 56
 min_temp: -20
 max_temp: 80
+
+[temperature_sensor Chamber_BME]
+sensor_type: BME280_TCA9548A
+tca9548a: mux1
+tca9548a_channel: 5
+i2c_address: 118
+min_temp: -20
+max_temp: 80
 ```
 
 The `[tca9548a mux1]` section both defines the mux and loads the plugin, so a
@@ -90,6 +99,8 @@ options. The example uses `mmu` and `i2c2_PB10_PB11`.
 environment sensors on that mux. It defaults to `30`. TCA9548A AHT sensor
 sections intentionally do not support `aht10_report_time`; set the shared
 polling interval on the mux so all lanes can be scheduled together.
+`BME280_TCA9548A` follows the same rule and does not support per-sensor
+`bme280_report_time`.
 
 At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
 same mux are spread evenly across `environment_report_time` so their periodic
@@ -132,6 +143,7 @@ read-back byte matches the requested channel mask.
 
 ## Notes
 
-This prototype deliberately supports only AHT2X sensors. It wraps the existing
-Klipper AHT2X driver and re-selects the TCA9548A channel before every I2C
-write/read, which avoids relying on mux state across reactor pauses.
+This prototype deliberately supports only a narrow set of environment sensors.
+It wraps existing Klipper sensor drivers and re-selects the TCA9548A channel
+before every I2C write/read, which avoids relying on mux state across reactor
+pauses.
