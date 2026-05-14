@@ -24,6 +24,7 @@ AHT1X_TCA9548A
 AHT2X_TCA9548A
 AHT3X_TCA9548A
 BME280_TCA9548A
+SHT3X_TCA9548A
 ```
 
 ## Example
@@ -84,6 +85,14 @@ tca9548a_channel: 5
 i2c_address: 118
 min_temp: -20
 max_temp: 80
+
+[temperature_sensor Chamber_SHT]
+sensor_type: SHT3X_TCA9548A
+tca9548a: mux1
+tca9548a_channel: 6
+i2c_address: 68
+min_temp: -20
+max_temp: 80
 ```
 
 The `[tca9548a mux1]` section both defines the mux and loads the plugin, so a
@@ -100,7 +109,8 @@ environment sensors on that mux. It defaults to `30`. TCA9548A AHT sensor
 sections intentionally do not support `aht10_report_time`; set the shared
 polling interval on the mux so all lanes can be scheduled together.
 `BME280_TCA9548A` follows the same rule and does not support per-sensor
-`bme280_report_time`.
+`bme280_report_time`. `SHT3X_TCA9548A` also uses the mux interval and does not
+support per-sensor `sht3x_report_time`.
 
 At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
 same mux are spread evenly across `environment_report_time` so their periodic
@@ -109,6 +119,7 @@ polls do not all run at the same instant.
 If your TCA9548A has A0/A1/A2 pulled high or low differently, adjust the mux
 `i2c_address` from the default `112` (`0x70`). Klipper expects I2C addresses in
 decimal. AHT20's `0x38` address is written as `56` in each sensor section.
+SHT3X's default `0x44` address is written as `68`.
 
 ## Debug
 
