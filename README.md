@@ -32,6 +32,7 @@ AHT3X_TCA9548A
 i2c_mcu: mmu
 i2c_bus: i2c2_PB10_PB11
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
+environment_report_time: 30
 # debug_no_disable: True
 
 [temperature_sensor Lane_0]
@@ -84,6 +85,11 @@ Use the Klipper MCU name and I2C bus name for your board in `i2c_mcu` and
 `i2c_bus` on the `[tca9548a mux1]` section. Sensors using that mux inherit
 `i2c_mcu`, `i2c_bus`, and `i2c_speed` from the mux unless they override those
 options. The example uses `mmu` and `i2c2_PB10_PB11`.
+
+`environment_report_time` sets the polling interval, in seconds, for
+environment sensors on that mux. It defaults to `30`. TCA9548A AHT sensor
+sections intentionally do not support `aht10_report_time`; set the shared
+polling interval on the mux so all lanes can be scheduled together.
 
 If your TCA9548A has A0/A1/A2 pulled high or low differently, adjust the mux
 `i2c_address` from the default `112` (`0x70`). Klipper expects I2C addresses in

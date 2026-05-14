@@ -11,6 +11,9 @@ INHERITED_I2C_OPTIONS = set([
     "i2c_mcu", "i2c_bus", "i2c_speed",
     "i2c_software_scl_pin", "i2c_software_sda_pin",
 ])
+INHERITED_OPTION_ALIASES = {
+    "aht10_report_time": "environment_report_time",
+}
 
 
 def _has_option(config, option):
@@ -29,15 +32,24 @@ class MuxedSensorConfig:
         if option in INHERITED_I2C_OPTIONS and not _has_option(
                 self.sensor_config, option):
             return self.mux_config
+        if option in INHERITED_OPTION_ALIASES and not _has_option(
+                self.sensor_config, option):
+            return self.mux_config
         return self.sensor_config
 
+    def _get_option_name(self, option):
+        if option in INHERITED_OPTION_ALIASES and not _has_option(
+                self.sensor_config, option):
+            return INHERITED_OPTION_ALIASES[option]
+        return option
+
     def get(self, option, *args, **kwargs):
-        return self._get_config_for_option(option).get(option, *args,
-                                                       **kwargs)
+        config = self._get_config_for_option(option)
+        return config.get(self._get_option_name(option), *args, **kwargs)
 
     def getint(self, option, *args, **kwargs):
-        return self._get_config_for_option(option).getint(option, *args,
-                                                          **kwargs)
+        config = self._get_config_for_option(option)
+        return config.getint(self._get_option_name(option), *args, **kwargs)
 
 
 class TCA9548A:
@@ -54,6 +66,8 @@ class TCA9548A:
         self.config_address = config.getint("i2c_address",
                                             TCA9548A_I2C_ADDR,
                                             minval=0, maxval=127)
+        self.environment_report_time = config.getint(
+            "environment_report_time", 30, minval=5)
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000)
         self.write_i2c = bus.MCU_I2C_from_config(
@@ -144,6 +158,7 @@ class TCA9548A:
             "i2c_mcu": self.config_mcu,
             "i2c_bus": self.config_bus,
             "i2c_address": self.config_address,
+            "environment_report_time": self.environment_report_time,
         }
 
     cmd_TCA_SELECT_help = "Select or disable a TCA9548A mux channel"
@@ -230,6 +245,11 @@ class MuxedI2C:
 
 class AHTTCA9548AMixin:
     def __init__(self, config):
+        if _has_option(config, "aht10_report_time"):
+            raise config.error(
+                "%s: aht10_report_time is not supported on TCA9548A AHT "
+                "sensors; set environment_report_time in the [tca9548a] "
+                "mux section" % (config.get_name(),))
         self._mux = None
         self._mux_channel = config.getint("tca9548a_channel", minval=0,
                                           maxval=7)
