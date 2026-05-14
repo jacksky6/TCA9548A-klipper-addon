@@ -315,6 +315,9 @@ class AHTTCA9548AMixin:
                          self.model, self.name)
             return
         self._init_sensor()
+        measured_time = self.reactor.monotonic()
+        print_time = self.i2c.get_mcu().estimated_print_time(measured_time)
+        self._callback(print_time, self.temp)
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
 
@@ -390,6 +393,7 @@ class BME280TCA9548A(bme280.BME280):
                 "BME280_TCA9548A %s detected unsupported chip type %s" % (
                     self.name, self.chip_type))
             return
+        self._sample_bme280(self.reactor.monotonic())
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
 
@@ -436,6 +440,7 @@ class SHT3XTCA9548A(sht3x.SHT3X):
 
     def handle_connect(self):
         self._init_sht3x()
+        self._sample_sht3x(self.reactor.monotonic())
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
 
