@@ -34,7 +34,6 @@ i2c_mcu: mmu
 i2c_bus: i2c2_PB10_PB11
 i2c_address: 112 # 0x70，A0/A1/A2 全部接低；0x71-0x77 对应 113-119
 environment_report_time: 30
-# debug_no_disable: True
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
@@ -43,7 +42,6 @@ tca9548a_channel: 0
 i2c_address: 56
 min_temp: -20
 max_temp: 80
-# debug_skip_init: True
 
 [temperature_sensor Lane_1]
 sensor_type: AHT2X_TCA9548A
@@ -122,6 +120,14 @@ TCA_SELECT MUX=mux1
 第一条命令选择 channel 0。`TCA_STATUS` 会读取 TCA9548A 控制寄存器。最后一条命令不带 `CHANNEL`，用于关闭所有通道。
 
 `select_delay` 会在每次写 mux 后等待一小段时间，默认是 `0`，正常 TCA9548A 不需要额外延时。`verify_select` 会在每次选择通道后读回控制寄存器确认是否成功，只建议调试时开启。
+
+`debug_no_disable` 默认值是 `False`。默认情况下，Klipper 启动时插件会向
+TCA9548A 写入 `0x00`，先关闭所有 mux 通道，再进行正常传感器初始化。设置为
+`True` 会跳过这个启动时的关闭通道动作，只建议在排查 mux 硬件状态时使用。
+
+`debug_skip_init` 默认值是 `False`。在 AHT mux 传感器上设置为 `True` 时，会跳过
+AHT 传感器初始化流程，让 Klipper 先进入 ready 状态，方便手动测试 mux。正常配置
+不应该设置这两个 debug 选项。
 
 ## 说明
 

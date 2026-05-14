@@ -37,7 +37,6 @@ i2c_mcu: mmu
 i2c_bus: i2c2_PB10_PB11
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 environment_report_time: 30
-# debug_no_disable: True
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
@@ -46,7 +45,6 @@ tca9548a_channel: 0
 i2c_address: 56
 min_temp: -20
 max_temp: 80
-# debug_skip_init: True
 
 [temperature_sensor Lane_1]
 sensor_type: AHT2X_TCA9548A
@@ -153,6 +151,16 @@ control register. The last command disables all channels.
 TCA9548A normally does not need a command processing delay. `verify_select`
 reads the control register after each write and only reports success if the
 read-back byte matches the requested channel mask.
+
+`debug_no_disable` defaults to `False`. When it is `False`, the plugin writes
+`0x00` to the TCA9548A during Klipper startup to disable all mux channels before
+normal sensor initialization. Setting it to `True` skips that startup disable
+write, which is useful only when debugging mux hardware state.
+
+`debug_skip_init` defaults to `False`. On AHT mux sensors, setting it to `True`
+skips the sensor initialization sequence so Klipper can reach ready state while
+you test the mux manually. Normal configurations should leave both debug options
+unset.
 
 ## Notes
 
