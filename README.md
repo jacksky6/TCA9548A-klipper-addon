@@ -1,5 +1,7 @@
 # TCA9548A Klipper Add-on
 
+[中文文档](README.zh-CN.md)
+
 Experimental Klipper add-on for testing AHT sensors behind a TCA9548A I2C
 multiplexer.
 
