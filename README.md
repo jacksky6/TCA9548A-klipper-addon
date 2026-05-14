@@ -1,11 +1,11 @@
 # TCA9548A Klipper Add-on
 
-Experimental Klipper add-on for testing AHT2X sensors behind a TCA9548A I2C
+Experimental Klipper add-on for testing AHT sensors behind a TCA9548A I2C
 multiplexer.
 
 The first goal is a small feasibility test: keep Klipper changes minimal, add a
-new `AHT2X_TCA9548A` temperature sensor type, and select the mux channel before
-each AHT2X I2C operation.
+small set of AHT temperature sensor types, and select the mux channel before
+each AHT I2C operation.
 
 ## Install
 
@@ -16,6 +16,14 @@ Copy `tca9548a.py` into Klipper's `klippy/extras/` directory:
 ```
 
 Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
+
+Supported AHT sensor types:
+
+```text
+AHT1X_TCA9548A
+AHT2X_TCA9548A
+AHT3X_TCA9548A
+```
 
 ## Example
 
@@ -70,7 +78,7 @@ max_temp: 80
 
 The `[tca9548a mux1]` section both defines the mux and loads the plugin, so a
 separate `[tca9548a]` section is not required. Put the mux section before any
-`[temperature_sensor]` section that uses `sensor_type: AHT2X_TCA9548A`.
+`[temperature_sensor]` section that uses an `*_TCA9548A` sensor type.
 
 Use the Klipper MCU name and I2C bus name for your board in `i2c_mcu` and
 `i2c_bus` on the `[tca9548a mux1]` section. Sensors using that mux inherit

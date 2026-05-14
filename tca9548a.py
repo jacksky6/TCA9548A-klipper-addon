@@ -228,9 +228,7 @@ class MuxedI2C:
                                          retry=retry)
 
 
-class AHT2xTCA9548A(aht10.AHT2x):
-    model = "aht2x_tca9548a"
-
+class AHTTCA9548AMixin:
     def __init__(self, config):
         self._mux = None
         self._mux_channel = config.getint("tca9548a_channel", minval=0,
@@ -244,7 +242,7 @@ class AHT2xTCA9548A(aht10.AHT2x):
                 mux_section,))
         mux = config.get_printer().load_object(config, mux_section)
         mux_config = config.getsection(mux_section)
-        super(AHT2xTCA9548A, self).__init__(
+        super(AHTTCA9548AMixin, self).__init__(
             MuxedSensorConfig(config, mux_config))
         self._mux = mux
         self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
@@ -257,7 +255,7 @@ class AHT2xTCA9548A(aht10.AHT2x):
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)
             return
-        super(AHT2xTCA9548A, self).handle_connect()
+        super(AHTTCA9548AMixin, self).handle_connect()
 
     def _patch_temperature_sensor_status(self):
         if self._status_patched:
@@ -281,14 +279,28 @@ class AHT2xTCA9548A(aht10.AHT2x):
                      self.model, self.name, tsensor_name)
 
     def get_status(self, eventtime):
-        status = super(AHT2xTCA9548A, self).get_status(eventtime)
+        status = super(AHTTCA9548AMixin, self).get_status(eventtime)
         status["tca9548a_channel"] = self._mux_channel
         return status
 
 
+class AHT1xTCA9548A(AHTTCA9548AMixin, aht10.AHT1x):
+    model = "aht1x_tca9548a"
+
+
+class AHT2xTCA9548A(AHTTCA9548AMixin, aht10.AHT2x):
+    model = "aht2x_tca9548a"
+
+
+class AHT3xTCA9548A(AHTTCA9548AMixin, aht10.AHT3x):
+    model = "aht3x_tca9548a"
+
+
 def _register_sensor_factory(config):
     pheaters = config.get_printer().load_object(config, "heaters")
+    pheaters.add_sensor_factory("AHT1X_TCA9548A", AHT1xTCA9548A)
     pheaters.add_sensor_factory("AHT2X_TCA9548A", AHT2xTCA9548A)
+    pheaters.add_sensor_factory("AHT3X_TCA9548A", AHT3xTCA9548A)
 
 
 def load_config(config):
