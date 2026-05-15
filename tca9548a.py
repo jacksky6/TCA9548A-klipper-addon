@@ -236,6 +236,7 @@ class MuxedI2C:
         self.mux = mux
         self.channel = channel
         self.i2c = i2c
+        self.i2c_address = i2c.get_i2c_address()
 
     def _select(self):
         self.mux.select_channel(self.channel)
@@ -348,6 +349,32 @@ class AHTTCA9548AMixin:
         return status
 
 
+class TemperatureSensorStatusMixin:
+    def _patch_temperature_sensor_status(self):
+        if getattr(self, "_status_patched", False):
+            return
+        tsensor_name = "temperature_sensor %s" % (self.name,)
+        tsensor = self.printer.lookup_object(tsensor_name, None)
+        if tsensor is None:
+            return
+        original_get_status = tsensor.get_status
+        sensor = self
+
+        def get_status_with_environment(eventtime):
+            status = original_get_status(eventtime)
+            sensor_status = sensor.get_status(eventtime)
+            for key in ("humidity",):
+                if key in sensor_status:
+                    status[key] = sensor_status[key]
+            status["tca9548a_channel"] = sensor._mux_channel
+            return status
+
+        tsensor.get_status = get_status_with_environment
+        self._status_patched = True
+        logging.info("%s %s: exposed environment data on '%s'",
+                     self.__class__.__name__, self.name, tsensor_name)
+
+
 class AHT1xTCA9548A(AHTTCA9548AMixin, aht10.AHT1x):
     model = "aht1x_tca9548a"
 
@@ -360,7 +387,7 @@ class AHT3xTCA9548A(AHTTCA9548AMixin, aht10.AHT3x):
     model = "aht3x_tca9548a"
 
 
-class BME280TCA9548A(bme280.BME280):
+class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
     def __init__(self, config):
         if _has_option(config, "bme280_report_time"):
             raise config.error(
@@ -370,6 +397,7 @@ class BME280TCA9548A(bme280.BME280):
         self._mux = None
         self._mux_channel = config.getint("tca9548a_channel", minval=0,
                                           maxval=7)
+        self._status_patched = False
         mux_name = config.get("tca9548a")
         mux_section = "tca9548a %s" % (mux_name,)
         if not config.has_section(mux_section):
@@ -387,6 +415,7 @@ class BME280TCA9548A(bme280.BME280):
                      self.name, mux_name, self._mux_channel)
 
     def handle_connect(self):
+        self._patch_temperature_sensor_status()
         self._init_bmxx80()
         if self.chip_type != 'BME280':
             self.printer.invoke_shutdown(
@@ -412,7 +441,7 @@ class BME280TCA9548A(bme280.BME280):
         return status
 
 
-class SHT3XTCA9548A(sht3x.SHT3X):
+class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
     def __init__(self, config):
         if _has_option(config, "sht3x_report_time"):
             raise config.error(
@@ -422,6 +451,7 @@ class SHT3XTCA9548A(sht3x.SHT3X):
         self._mux = None
         self._mux_channel = config.getint("tca9548a_channel", minval=0,
                                           maxval=7)
+        self._status_patched = False
         mux_name = config.get("tca9548a")
         mux_section = "tca9548a %s" % (mux_name,)
         if not config.has_section(mux_section):
@@ -439,6 +469,7 @@ class SHT3XTCA9548A(sht3x.SHT3X):
                      self.name, mux_name, self._mux_channel)
 
     def handle_connect(self):
+        self._patch_temperature_sensor_status()
         self._init_sht3x()
         self._sample_sht3x(self.reactor.monotonic())
         waketime = self._mux.get_environment_waketime(self)
