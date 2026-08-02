@@ -189,6 +189,14 @@ class TCA9548A:
             self.last_channel = None
             return True
 
+    def is_busy(self):
+        # True while another device holds the mux for a multi-transaction
+        # operation.  Environment sensors check this and skip a sample rather
+        # than queue behind it - a missed sample costs one report interval,
+        # while queueing would stall the reactor timer for the length of the
+        # operation ahead of it.
+        return self.mutex.test()
+
     def get_status(self, eventtime):
         return {
             "channel": self.last_channel,
@@ -232,16 +240,29 @@ class TCA9548A:
 
 
 class MuxedI2C:
+    # I2C wrapper that selects the mux channel before each transaction.
+    #
+    # The caller must hold mux.mutex for the whole logical operation - a full
+    # sensor sample, or one PN532 command/ack/response sequence.  This class
+    # never takes the mutex itself.  Taking it per transaction would let
+    # another channel switch the mux inside a multi-transaction sequence,
+    # because Klipper i2c helpers pause the reactor while waiting on the mcu.
+    # Nesting is not an option either: ReactorMutex is not reentrant, so a
+    # caller that already holds it would deadlock on itself.
     def __init__(self, mux, channel, i2c):
         self.mux = mux
         self.channel = channel
         self.i2c = i2c
         self.i2c_address = i2c.get_i2c_address()
-
-    def _select(self):
-        self.mux.select_channel(self.channel)
+        self._warned_unlocked = False
 
     def _select_locked(self):
+        if not self.mux.mutex.test() and not self._warned_unlocked:
+            self._warned_unlocked = True
+            logging.error("TCA9548A '%s': channel %d accessed without holding"
+                          " the mux lock; transactions on this channel are not"
+                          " serialized against other channels",
+                          self.mux.name, self.channel)
         self.mux._select_channel_locked(self.channel)
 
     def get_oid(self):
@@ -257,29 +278,25 @@ class MuxedI2C:
         return self.i2c.get_command_queue()
 
     def i2c_write_noack(self, data, minclock=0, reqclock=0):
-        with self.mux.mutex:
-            self._select_locked()
-            return self.i2c.i2c_write_noack(data, minclock=minclock,
-                                            reqclock=reqclock)
+        self._select_locked()
+        return self.i2c.i2c_write_noack(data, minclock=minclock,
+                                        reqclock=reqclock)
 
     def i2c_write(self, data, minclock=0, reqclock=0, retry=True):
-        with self.mux.mutex:
-            self._select_locked()
-            return self.i2c.i2c_write(data, minclock=minclock,
-                                      reqclock=reqclock)
+        self._select_locked()
+        return self.i2c.i2c_write(data, minclock=minclock,
+                                  reqclock=reqclock, retry=retry)
 
     def i2c_read(self, write, read_len, retry=True):
-        with self.mux.mutex:
-            self._select_locked()
-            return self.i2c.i2c_read(write, read_len, retry=retry)
+        self._select_locked()
+        return self.i2c.i2c_read(write, read_len, retry=retry)
 
     def i2c_transfer(self, write, read_len=0, minclock=0, reqclock=0,
                      retry=True):
-        with self.mux.mutex:
-            self._select_locked()
-            return self.i2c.i2c_transfer(write, read_len=read_len,
-                                         minclock=minclock, reqclock=reqclock,
-                                         retry=retry)
+        self._select_locked()
+        return self.i2c.i2c_transfer(write, read_len=read_len,
+                                     minclock=minclock, reqclock=reqclock,
+                                     retry=retry)
 
 
 class AHTTCA9548AMixin:
@@ -315,12 +332,19 @@ class AHTTCA9548AMixin:
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)
             return
-        self._init_sensor()
+        with self._mux.mutex:
+            self._init_sensor()
         measured_time = self.reactor.monotonic()
         print_time = self.i2c.get_mcu().estimated_print_time(measured_time)
         self._callback(print_time, self.temp)
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
+
+    def _sample_aht(self, eventtime):
+        if self._mux.is_busy():
+            return eventtime + self.report_time
+        with self._mux.mutex:
+            return super(AHTTCA9548AMixin, self)._sample_aht(eventtime)
 
     def _patch_temperature_sensor_status(self):
         if self._status_patched:
@@ -416,13 +440,17 @@ class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
-        self._init_bmxx80()
-        if self.chip_type != 'BME280':
-            self.printer.invoke_shutdown(
-                "BME280_TCA9548A %s detected unsupported chip type %s" % (
-                    self.name, self.chip_type))
-            return
-        self._sample_bme280(self.reactor.monotonic())
+        with self._mux.mutex:
+            self._init_bmxx80()
+            if self.chip_type != 'BME280':
+                self.printer.invoke_shutdown(
+                    "BME280_TCA9548A %s detected unsupported chip type %s" % (
+                        self.name, self.chip_type))
+                return
+            # Call the base sampler directly: the override below would see the
+            # mutex we are holding and skip this first reading.
+            super(BME280TCA9548A, self)._sample_bme280(
+                self.reactor.monotonic())
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
 
@@ -430,7 +458,10 @@ class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
         return self._report_time
 
     def _sample_bme280(self, eventtime):
-        result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
+        if self._mux.is_busy():
+            return eventtime + self._report_time
+        with self._mux.mutex:
+            result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
         if result == self.reactor.NEVER:
             return result
         return self.reactor.monotonic() + self._report_time
@@ -470,10 +501,17 @@ class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
-        self._init_sht3x()
-        self._sample_sht3x(self.reactor.monotonic())
+        with self._mux.mutex:
+            self._init_sht3x()
+            super(SHT3XTCA9548A, self)._sample_sht3x(self.reactor.monotonic())
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
+
+    def _sample_sht3x(self, eventtime):
+        if self._mux.is_busy():
+            return eventtime + self.report_time
+        with self._mux.mutex:
+            return super(SHT3XTCA9548A, self)._sample_sht3x(eventtime)
 
     def get_status(self, eventtime):
         status = super(SHT3XTCA9548A, self).get_status(eventtime)
