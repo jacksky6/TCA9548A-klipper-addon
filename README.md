@@ -15,24 +15,34 @@ Copy `tca9548a.py` into Klipper's `klippy/extras/` directory:
 ~/klipper/klippy/extras/tca9548a.py
 ```
 
-Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
+Configure the `[tca9548a]` and `[temperature_sensor]` sections in your own
+`printer.cfg` for the sensors, I2C addresses, and mux channels actually
+connected to your hardware. Do not copy an example configuration unchanged.
 
 On a Klipper host, the installer can create the symbolic link for you:
 
 ```bash
-bash install.sh
-# Or: bash install.sh --firmware-dir /path/to/klipper-or-kalico
+cd ~
+git clone https://github.com/jacksky6/TCA9548A-klipper-addon.git
+cd TCA9548A-klipper-addon
+./install.sh
 ```
 
 It displays the current Git branch, asks whether to update this repository,
 detects Klipper or Kalico, and creates the link in that firmware's extras
-directory.
+directory. By default it searches `~/klipper` and `~/kalico`. If your firmware
+is installed elsewhere, pass its root directory explicitly:
 
-### Happy-Hare RFID PN532 Integration
+```bash
+./install.sh --firmware-dir /path/to/klipper-or-kalico
+```
 
-The TCA9548A mux core is always installed as a **separate Klipper Extra** at
+### Happy-Hare RFID PN532 Integration (Planned)
+
+This integration is not implemented yet. When it is added, the TCA9548A mux
+core will remain installed as a **separate Klipper Extra** at
 `klippy/extras/tca9548a.py`. The Happy-Hare-RFID-Reader PN532 mux adapter
-lives only in `nfc_gates/pn532_tca9548a_driver.py` and references that
+will live only in `nfc_gates/pn532_tca9548a_driver.py` and reference that
 installed mux core.
 
 The RFID project and its installer must not bundle, copy, download, or
@@ -51,7 +61,11 @@ BME280_TCA9548A
 SHT3X_TCA9548A
 ```
 
-## Example
+## Configuration Reference
+
+The following is a reference showing several supported sensor types. Select
+only the sections that match your installed hardware, then adjust the mux
+settings, channel numbers, I2C addresses, and temperature limits accordingly.
 
 ```ini
 [tca9548a mux1]
