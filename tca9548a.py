@@ -1,5 +1,33 @@
-# TCA9548A I2C mux support for Klipper AHT2X sensors
-#
+"""TCA9548A I2C multiplexer support for Klipper.
+
+This module selects TCA9548A channels and provides MuxedI2C, an I2C wrapper
+for devices behind the mux.  It includes Klipper temperature-sensor adapters
+for AHT1x, AHT2x, AHT3x, BME280, and SHT3X devices.
+
+Typical temperature-sensor configuration::
+
+    [tca9548a mux0]
+    i2c_mcu: mcu
+    i2c_bus: i2c1_PB6_PB7
+    i2c_address: 112              # 0x70
+    environment_report_time: 30
+
+    [temperature_sensor chamber]
+    sensor_type: AHT2X_TCA9548A
+    # Also: AHT1X_TCA9548A, AHT3X_TCA9548A, BME280_TCA9548A,
+    #       SHT3X_TCA9548A
+    tca9548a: mux0
+    tca9548a_channel: 0
+    i2c_address: 56               # 0x38 for AHT2x
+
+The sensor inherits i2c_mcu, i2c_bus, and i2c_speed from its mux section
+unless it overrides them locally.
+
+The mux core is deliberately reader-agnostic.  PN532 support belongs in the
+Happy-Hare-RFID-Reader addon, where pn532_tca9548a_driver.py wraps a PN532
+driver with MuxedI2C and holds the mux lock for each complete PN532 operation.
+"""
+
 # Copyright (C) 2026
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -21,6 +49,9 @@ def _has_option(config, option):
 
 
 class MuxedSensorConfig:
+    # Reuse Klipper's native sensor drivers while letting the mux section
+    # supply the shared I2C settings.  All sensor-specific settings still
+    # resolve from the original sensor section.
     def __init__(self, sensor_config, mux_config):
         self.sensor_config = sensor_config
         self.mux_config = mux_config
@@ -103,6 +134,8 @@ class TCA9548A:
         if self.environment_schedule_ready:
             return
         self.environment_schedule.clear()
+        # A stable sort keeps the staggered schedule predictable across
+        # restarts and spreads devices uniformly over one report interval.
         sensors = sorted(self.environment_sensors, key=lambda s: (s[0], s[1]))
         sensor_count = len(sensors)
         if not sensor_count:
@@ -186,11 +219,10 @@ class TCA9548A:
             return True
 
     def is_busy(self):
-        # True while another device holds the mux for a multi-transaction
-        # operation.  Environment sensors check this and skip a sample rather
-        # than queue behind it - a missed sample costs one report interval,
-        # while queueing would stall the reactor timer for the length of the
-        # operation ahead of it.
+        # Sensor timers call this before acquiring the lock.  With no reactor
+        # pause between this test and `with mutex`, it is a safe try-acquire
+        # pattern: skip one low-priority sample instead of queueing behind a
+        # long multi-transaction operation such as PN532.
         return self.mutex.test()
 
     def get_status(self, eventtime):
@@ -253,6 +285,9 @@ class MuxedI2C:
         self._warned_unlocked = False
 
     def _select_locked(self):
+        # ReactorMutex exposes only locked/unlocked state, not lock ownership.
+        # This can diagnose an entirely unlocked access, but callers must still
+        # obey the ownership contract documented above.
         if not self.mux.mutex.test() and not self._warned_unlocked:
             self._warned_unlocked = True
             logging.error("TCA9548A '%s': channel %d accessed without holding"
@@ -328,6 +363,8 @@ class AHTTCA9548AMixin:
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)
             return
+        # Sensor initialization can issue several I2C transactions and yield
+        # to the reactor; keep the channel selected for the whole sequence.
         with self._mux.mutex:
             self._init_sensor()
         measured_time = self.reactor.monotonic()
@@ -349,6 +386,8 @@ class AHTTCA9548AMixin:
         tsensor = self.printer.lookup_object(tsensor_name, None)
         if tsensor is None:
             return
+        # Klipper exposes the wrapper object's status, so publish humidity and
+        # mux metadata there without changing the native driver API.
         original_get_status = tsensor.get_status
         sensor = self
 
@@ -377,6 +416,8 @@ class TemperatureSensorStatusMixin:
         tsensor = self.printer.lookup_object(tsensor_name, None)
         if tsensor is None:
             return
+        # Preserve the wrapper's native status and augment it with values that
+        # are only available from the muxed sensor implementation.
         original_get_status = tsensor.get_status
         sensor = self
 
@@ -436,6 +477,9 @@ class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        # Initialization and the first read must stay on one channel.  The
+        # base sampler is called directly below because the override uses the
+        # mutex state to decide whether to skip a scheduled sample.
         with self._mux.mutex:
             self._init_bmxx80()
             if self.chip_type != 'BME280':
@@ -497,6 +541,8 @@ class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        # Keep initialization and the immediate first sample on one channel;
+        # calling the base sampler avoids this class's busy-skip override.
         with self._mux.mutex:
             self._init_sht3x()
             super(SHT3XTCA9548A, self)._sample_sht3x(self.reactor.monotonic())
