@@ -25,13 +25,15 @@ unless it overrides them locally.
 
 The mux core is deliberately reader-agnostic.  PN532 support belongs in the
 Happy-Hare-RFID-Reader addon, where pn532_tca9548a_driver.py wraps a PN532
-driver with MuxedI2C and holds the mux lock for each complete PN532 operation.
+driver with MuxedI2C and holds a mux session for each complete PN532 operation.
 """
 
 # Copyright (C) 2026
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+from contextlib import contextmanager
 import logging
+import greenlet
 from . import aht10, bme280, bus, sht3x
 
 TCA9548A_I2C_ADDR = 0x70
@@ -109,6 +111,9 @@ class TCA9548A:
         self.last_channel = None
         self.last_control = None
         self._reported_select_failures = set()
+        self._reported_session_access_failures = set()
+        self._session_owner = None
+        self._session_depth = 0
         self.environment_sensors = []
         self.environment_schedule = {}
         self.environment_schedule_ready = False
@@ -182,6 +187,44 @@ class TCA9548A:
         with self.mutex:
             return self._write_control_locked(value)
 
+    @contextmanager
+    def session(self):
+        # ReactorMutex is not reentrant.  Make nested use by the same logical
+        # operation safe while retaining a concrete owner for MuxedI2C checks.
+        owner = greenlet.getcurrent()
+        if self._session_owner is owner:
+            self._session_depth += 1
+            try:
+                yield
+            finally:
+                self._session_depth -= 1
+            return
+        with self.mutex:
+            self._session_owner = owner
+            self._session_depth = 1
+            try:
+                yield
+            finally:
+                self._session_depth = 0
+                self._session_owner = None
+
+    def is_session_owner(self):
+        return self._session_owner is greenlet.getcurrent()
+
+    def check_session_access(self, channel):
+        if self.is_session_owner():
+            self._reported_session_access_failures.discard(channel)
+            return True
+        message = ("TCA9548A '%s': channel %d accessed outside mux.session(); "
+                   "the downstream I2C operation was skipped" % (
+                       self.name, channel))
+        if channel in self._reported_session_access_failures:
+            return False
+        self._reported_session_access_failures.add(channel)
+        logging.error(message)
+        self.gcode.respond_info(message)
+        return False
+
     def _read_control_locked(self):
         params = self.i2c.i2c_read([], 1)
         if params is None:
@@ -239,7 +282,7 @@ class TCA9548A:
 
     def is_busy(self):
         # Sensor timers call this before acquiring the lock.  With no reactor
-        # pause between this test and `with mutex`, it is a safe try-acquire
+        # pause between this test and `with session`, it is a safe try-acquire
         # pattern: skip one low-priority sample instead of queueing behind a
         # long multi-transaction operation such as PN532.
         return self.mutex.test()
@@ -289,9 +332,9 @@ class TCA9548A:
 class MuxedI2C:
     # I2C wrapper that selects the mux channel before each transaction.
     #
-    # The caller must hold mux.mutex for the whole logical operation - a full
-    # sensor sample, or one PN532 command/ack/response sequence.  This class
-    # never takes the mutex itself.  Taking it per transaction would let
+    # The caller must use mux.session() for the whole logical operation - a
+    # full sensor sample, or one PN532 command/ack/response sequence.  This
+    # class never takes the mutex itself.  Taking it per transaction would let
     # another channel switch the mux inside a multi-transaction sequence,
     # because Klipper i2c helpers pause the reactor while waiting on the mcu.
     # Nesting is not an option either: ReactorMutex is not reentrant, so a
@@ -301,18 +344,10 @@ class MuxedI2C:
         self.channel = channel
         self.i2c = i2c
         self.i2c_address = i2c.get_i2c_address()
-        self._warned_unlocked = False
 
     def _select_locked(self):
-        # ReactorMutex exposes only locked/unlocked state, not lock ownership.
-        # This can diagnose an entirely unlocked access, but callers must still
-        # obey the ownership contract documented above.
-        if not self.mux.mutex.test() and not self._warned_unlocked:
-            self._warned_unlocked = True
-            logging.error("TCA9548A '%s': channel %d accessed without holding"
-                          " the mux lock; transactions on this channel are not"
-                          " serialized against other channels",
-                          self.mux.name, self.channel)
+        if not self.mux.check_session_access(self.channel):
+            return False
         return self.mux._select_channel_locked(self.channel)
 
     def get_oid(self):
@@ -388,7 +423,7 @@ class AHTTCA9548AMixin:
             return
         # Sensor initialization can issue several I2C transactions and yield
         # to the reactor; keep the channel selected for the whole sequence.
-        with self._mux.mutex:
+        with self._mux.session():
             self._init_sensor()
         measured_time = self.reactor.monotonic()
         print_time = self.i2c.get_mcu().estimated_print_time(measured_time)
@@ -399,7 +434,7 @@ class AHTTCA9548AMixin:
     def _sample_aht(self, eventtime):
         if self._mux.is_busy():
             return eventtime + self.report_time
-        with self._mux.mutex:
+        with self._mux.session():
             return super(AHTTCA9548AMixin, self)._sample_aht(eventtime)
 
     def _patch_temperature_sensor_status(self):
@@ -503,7 +538,7 @@ class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
         # Initialization and the first read must stay on one channel.  The
         # base sampler is called directly below because the override uses the
         # mutex state to decide whether to skip a scheduled sample.
-        with self._mux.mutex:
+        with self._mux.session():
             self._init_bmxx80()
             if self.chip_type != 'BME280':
                 self.printer.invoke_shutdown(
@@ -523,7 +558,7 @@ class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
     def _sample_bme280(self, eventtime):
         if self._mux.is_busy():
             return eventtime + self._report_time
-        with self._mux.mutex:
+        with self._mux.session():
             result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
         if result == self.reactor.NEVER:
             return result
@@ -566,7 +601,7 @@ class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
         self._patch_temperature_sensor_status()
         # Keep initialization and the immediate first sample on one channel;
         # calling the base sampler avoids this class's busy-skip override.
-        with self._mux.mutex:
+        with self._mux.session():
             self._init_sht3x()
             super(SHT3XTCA9548A, self)._sample_sht3x(self.reactor.monotonic())
         waketime = self._mux.get_environment_waketime(self)
@@ -575,7 +610,7 @@ class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
     def _sample_sht3x(self, eventtime):
         if self._mux.is_busy():
             return eventtime + self.report_time
-        with self._mux.mutex:
+        with self._mux.session():
             return super(SHT3XTCA9548A, self)._sample_sht3x(eventtime)
 
     def get_status(self, eventtime):
