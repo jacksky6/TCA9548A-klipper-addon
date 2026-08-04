@@ -337,8 +337,9 @@ class MuxedI2C:
     # class never takes the mutex itself.  Taking it per transaction would let
     # another channel switch the mux inside a multi-transaction sequence,
     # because Klipper i2c helpers pause the reactor while waiting on the mcu.
-    # Nesting is not an option either: ReactorMutex is not reentrant, so a
-    # caller that already holds it would deadlock on itself.
+    # Directly nesting ReactorMutex is not an option because it is not
+    # reentrant.  mux.session() handles nesting by the same greenlet without
+    # reacquiring the underlying mutex.
     def __init__(self, mux, channel, i2c):
         self.mux = mux
         self.channel = channel
