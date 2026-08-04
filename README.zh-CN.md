@@ -154,3 +154,7 @@ AHT 传感器初始化流程，让 Klipper 先进入 ready 状态，方便手动
 这个插件目前只面向少量温湿度传感器场景。它不会复制 Klipper 原生传感器算法，而是继承原生驱动，并把 I2C 对象替换为 mux 包装后的 I2C 对象。
 
 当前设计重点是降低多个环境传感器同时采样时的风险：同一个 TCA9548A 后面的传感器使用统一周期，并由插件在启动时自动错峰调度。
+
+## 许可证
+
+本项目采用 GNU General Public License v3.0 or later（GPL-3.0-or-later）许可证。详见 [LICENSE](LICENSE)。
