@@ -70,9 +70,6 @@ class TCA9548A:
             "environment_report_time", 30, minval=5)
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000)
-        self.write_i2c = bus.MCU_I2C_from_config(
-            config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000,
-            async_write_only=True)
         self.mutex = self.reactor.mutex()
         logging.info("TCA9548A '%s': configured on mcu '%s', bus '%s', "
                      "address %d",
@@ -134,10 +131,9 @@ class TCA9548A:
     def _write_control_locked(self, value):
         if self.last_control == value:
             return True
-        if self.verify_select:
-            self.i2c.i2c_write([value])
-        else:
-            self.write_i2c.i2c_write([value])
+        # Wait for the mux write to complete before a downstream device can
+        # submit its first I2C transaction on the selected channel.
+        self.i2c.i2c_write([value])
         if self.select_delay:
             self.reactor.pause(self.reactor.monotonic() + self.select_delay)
         if self.verify_select:
