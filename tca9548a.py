@@ -108,18 +108,19 @@ class TCA9548A:
                      self.config_address)
         self.last_channel = None
         self.last_control = None
+        self._reported_select_failures = set()
         self.environment_sensors = []
         self.environment_schedule = {}
         self.environment_schedule_ready = False
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
-        gcode = self.printer.lookup_object("gcode")
-        gcode.register_mux_command("TCA_SELECT", "MUX", self.name,
-                                   self.cmd_TCA_SELECT,
-                                   desc=self.cmd_TCA_SELECT_help)
-        gcode.register_mux_command("TCA_STATUS", "MUX", self.name,
-                                   self.cmd_TCA_STATUS,
-                                   desc=self.cmd_TCA_STATUS_help)
+        self.gcode = self.printer.lookup_object("gcode")
+        self.gcode.register_mux_command("TCA_SELECT", "MUX", self.name,
+                                        self.cmd_TCA_SELECT,
+                                        desc=self.cmd_TCA_SELECT_help)
+        self.gcode.register_mux_command("TCA_STATUS", "MUX", self.name,
+                                        self.cmd_TCA_STATUS,
+                                        desc=self.cmd_TCA_STATUS_help)
 
     def _handle_connect(self):
         if not self.debug_no_disable:
@@ -201,9 +202,27 @@ class TCA9548A:
         if self.last_channel == channel:
             return True
         if not self._write_control_locked(value):
+            # The physical mux state is unknown after a failed verification.
+            # Do not retain a cached channel or let downstream I2C continue.
+            self.last_control = None
+            self.last_channel = None
+            self._report_select_failure(channel)
             return False
         self.last_channel = channel
+        self._reported_select_failures.discard(channel)
         return True
+
+    def _report_select_failure(self, channel):
+        message = ("TCA9548A '%s': failed to verify selection of channel %d; "
+                   "the downstream I2C operation was skipped" % (
+                       self.name, channel))
+        # A recurring sensor timer must not flood the console or klippy.log.
+        # A successful later selection clears this latch for the channel.
+        if channel in self._reported_select_failures:
+            return
+        self._reported_select_failures.add(channel)
+        logging.error(message)
+        self.gcode.respond_info(message)
 
     def select_channel(self, channel):
         with self.mutex:
@@ -294,7 +313,7 @@ class MuxedI2C:
                           " the mux lock; transactions on this channel are not"
                           " serialized against other channels",
                           self.mux.name, self.channel)
-        self.mux._select_channel_locked(self.channel)
+        return self.mux._select_channel_locked(self.channel)
 
     def get_oid(self):
         return self.i2c.get_oid()
@@ -309,22 +328,26 @@ class MuxedI2C:
         return self.i2c.get_command_queue()
 
     def i2c_write_noack(self, data, minclock=0, reqclock=0):
-        self._select_locked()
+        if not self._select_locked():
+            return None
         return self.i2c.i2c_write_noack(data, minclock=minclock,
                                         reqclock=reqclock)
 
     def i2c_write(self, data, minclock=0, reqclock=0, retry=True):
-        self._select_locked()
+        if not self._select_locked():
+            return None
         return self.i2c.i2c_write(data, minclock=minclock,
                                   reqclock=reqclock, retry=retry)
 
     def i2c_read(self, write, read_len, retry=True):
-        self._select_locked()
+        if not self._select_locked():
+            return None
         return self.i2c.i2c_read(write, read_len, retry=retry)
 
     def i2c_transfer(self, write, read_len=0, minclock=0, reqclock=0,
                      retry=True):
-        self._select_locked()
+        if not self._select_locked():
+            return None
         return self.i2c.i2c_transfer(write, read_len=read_len,
                                      minclock=minclock, reqclock=reqclock,
                                      retry=retry)
