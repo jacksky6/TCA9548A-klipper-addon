@@ -16,6 +16,16 @@
 
 然后把类似 `tca9548a_aht2x_example.cfg` 的配置加入 `printer.cfg`。
 
+在 Klipper 主机上，也可以使用安装脚本创建软链接：
+
+```bash
+bash install.sh
+# 或：bash install.sh --firmware-dir /path/to/klipper-or-kalico
+```
+
+脚本会先显示当前 Git 分支，并询问是否更新仓库，然后检测 Klipper 或 Kalico，
+在对应的 extras 目录创建软链接。
+
 ### Happy-Hare RFID PN532 集成
 
 TCA9548A mux 核心始终作为**独立 Klipper Extra** 安装在

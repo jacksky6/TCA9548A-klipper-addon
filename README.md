@@ -19,6 +19,17 @@ Copy `tca9548a.py` into Klipper's `klippy/extras/` directory:
 
 Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
 
+On a Klipper host, the installer can create the symbolic link for you:
+
+```bash
+bash install.sh
+# Or: bash install.sh --firmware-dir /path/to/klipper-or-kalico
+```
+
+It displays the current Git branch, asks whether to update this repository,
+detects Klipper or Kalico, and creates the link in that firmware's extras
+directory.
+
 ### Happy-Hare RFID PN532 Integration
 
 The TCA9548A mux core is always installed as a **separate Klipper Extra** at
