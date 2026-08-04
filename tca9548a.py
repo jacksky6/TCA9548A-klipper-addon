@@ -20,8 +20,8 @@ Typical temperature-sensor configuration::
     tca9548a_channel: 0
     i2c_address: 56               # 0x38 for AHT2x
 
-The sensor inherits i2c_mcu, i2c_bus, and i2c_speed from its mux section
-unless it overrides them locally.
+The mux section is the only source of i2c_mcu, i2c_bus, i2c_speed, and
+software-I2C pin settings. Downstream settings for those options are ignored.
 
 The mux core is deliberately reader-agnostic.  PN532 support belongs in the
 Happy-Hare-RFID-Reader addon, where pn532_tca9548a_driver.py wraps a PN532
@@ -52,8 +52,9 @@ def _has_option(config, option):
 
 class MuxedSensorConfig:
     # Reuse Klipper's native sensor drivers while letting the mux section
-    # supply the shared I2C settings.  All sensor-specific settings still
-    # resolve from the original sensor section.
+    # supply the shared I2C settings.  I2C transport settings in a downstream
+    # sensor section are intentionally ignored; all other settings resolve
+    # from the original sensor section.
     def __init__(self, sensor_config, mux_config):
         self.sensor_config = sensor_config
         self.mux_config = mux_config
@@ -62,8 +63,7 @@ class MuxedSensorConfig:
         return getattr(self.sensor_config, name)
 
     def _get_config_for_option(self, option):
-        if option in INHERITED_I2C_OPTIONS and not _has_option(
-                self.sensor_config, option):
+        if option in INHERITED_I2C_OPTIONS:
             return self.mux_config
         if option in INHERITED_OPTION_ALIASES and not _has_option(
                 self.sensor_config, option):

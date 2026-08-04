@@ -113,9 +113,10 @@ separate `[tca9548a]` section is not required. Put the mux section before any
 `[temperature_sensor]` section that uses an `*_TCA9548A` sensor type.
 
 Use the Klipper MCU name and I2C bus name for your board in `i2c_mcu` and
-`i2c_bus` on the `[tca9548a mux1]` section. Sensors using that mux inherit
-`i2c_mcu`, `i2c_bus`, and `i2c_speed` from the mux unless they override those
-options. The example uses `mmu` and `i2c2_PB10_PB11`.
+`i2c_bus` on the `[tca9548a mux1]` section. That section is the sole source
+of `i2c_mcu`, `i2c_bus`, `i2c_speed`, and software-I2C pins for every device
+behind the mux. Any of those options in a downstream sensor section are
+ignored. The example uses `mmu` and `i2c2_PB10_PB11`.
 
 `environment_report_time` sets the polling interval, in seconds, for
 environment sensors on that mux. It defaults to `30`. TCA9548A AHT sensor

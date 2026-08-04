@@ -80,7 +80,7 @@ max_temp: 80
 
 `[tca9548a mux1]` 既定义 mux，也负责加载插件，不需要额外添加单独的 `[tca9548a]` 段。这个 mux 配置段要放在所有使用它的 `[temperature_sensor]` 段之前。
 
-`i2c_mcu` 和 `i2c_bus` 使用 Klipper 中对应 MCU 和 I2C 总线的名字。挂在这个 mux 后面的传感器默认继承 mux 的 `i2c_mcu`、`i2c_bus`、`i2c_speed`，除非在传感器段里单独覆盖。
+`i2c_mcu` 和 `i2c_bus` 使用 Klipper 中对应 MCU 和 I2C 总线的名字。`[tca9548a mux1]` 是其下所有设备唯一的 I2C 传输配置来源，包括 `i2c_mcu`、`i2c_bus`、`i2c_speed` 和软件 I2C 引脚。下游传感器段即使配置了这些选项也会被忽略。
 
 `environment_report_time` 是同一个 mux 下所有环境传感器的统一轮询周期，单位是秒，默认值为 `30`。插件不允许在单个传感器段里配置单独的轮询周期：
 
