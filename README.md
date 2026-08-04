@@ -9,17 +9,7 @@ each AHT I2C operation.
 
 ## Install
 
-Copy `tca9548a.py` into Klipper's `klippy/extras/` directory:
-
-```text
-~/klipper/klippy/extras/tca9548a.py
-```
-
-Configure the `[tca9548a]` and `[temperature_sensor]` sections in your own
-`printer.cfg` for the sensors, I2C addresses, and mux channels actually
-connected to your hardware. Do not copy an example configuration unchanged.
-
-On a Klipper host, the installer can create the symbolic link for you:
+Run the following on the Klipper or Kalico host:
 
 ```bash
 cd ~
@@ -28,14 +18,13 @@ cd TCA9548A-klipper-addon
 ./install.sh
 ```
 
-It displays the current Git branch, asks whether to update this repository,
-detects Klipper or Kalico, and creates the link in that firmware's extras
-directory. By default it searches `~/klipper` and `~/kalico`. If your firmware
-is installed elsewhere, pass its root directory explicitly:
+The installer displays the current Git branch and asks whether to update this
+repository. It then detects the Klipper or Kalico installation and creates the
+`tca9548a.py` symbolic link in its extras directory.
 
-```bash
-./install.sh --firmware-dir /path/to/klipper-or-kalico
-```
+Configure the `[tca9548a]` and `[temperature_sensor]` sections in your own
+`printer.cfg` for the sensors, I2C addresses, and mux channels actually
+connected to your hardware. Do not copy an example configuration unchanged.
 
 ### Happy-Hare RFID PN532 Integration (Planned)
 
