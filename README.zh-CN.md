@@ -16,6 +16,16 @@
 
 然后把类似 `tca9548a_aht2x_example.cfg` 的配置加入 `printer.cfg`。
 
+### Happy-Hare RFID PN532 集成
+
+TCA9548A mux 核心始终作为**独立 Klipper Extra** 安装在
+`klippy/extras/tca9548a.py`。Happy-Hare-RFID-Reader 的 PN532 mux 适配器只放在
+其 `nfc_gates/pn532_tca9548a_driver.py` 中，并引用已安装的 mux 核心。
+
+RFID 项目及其安装脚本不得打包、复制、下载或覆盖 `tca9548a.py`。部分用户可能
+已经安装本插件；NFC mux 配置应检测该独立安装是否存在，缺失时提示用户手动安装，
+存在时保留当前文件和版本。TCA9548A 的通用逻辑只在本仓库维护。
+
 当前支持的传感器类型：
 
 ```text

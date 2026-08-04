@@ -19,6 +19,19 @@ Copy `tca9548a.py` into Klipper's `klippy/extras/` directory:
 
 Then add a config like `tca9548a_aht2x_example.cfg` to `printer.cfg`.
 
+### Happy-Hare RFID PN532 Integration
+
+The TCA9548A mux core is always installed as a **separate Klipper Extra** at
+`klippy/extras/tca9548a.py`. The Happy-Hare-RFID-Reader PN532 mux adapter
+lives only in `nfc_gates/pn532_tca9548a_driver.py` and references that
+installed mux core.
+
+The RFID project and its installer must not bundle, copy, download, or
+overwrite `tca9548a.py`. Some users may already have this add-on installed.
+The NFC mux configuration should detect the separate installation and tell the
+user to install it when absent; when present, it must retain the existing file
+and version. Generic TCA9548A behavior is maintained only in this repository.
+
 Supported sensor types:
 
 ```text
