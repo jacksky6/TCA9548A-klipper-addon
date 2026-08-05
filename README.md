@@ -82,6 +82,7 @@ path: ~/TCA9548A-klipper-addon
 origin: https://github.com/jacksky6/TCA9548A-klipper-addon.git
 primary_branch: master
 install_script: install.sh
+is_system_service: False
 ```
 
 Restart Moonraker after saving the configuration. The update page will then
@@ -89,9 +90,10 @@ show this repository and run `install.sh` after each update to keep the
 symbolic link in place. The script has no interactive prompts: it attempts a
 fast-forward Git update and replaces an existing symbolic link, but refuses to
 overwrite a regular file. This configuration intentionally omits
-`managed_services`, so updating does not restart Klipper. Use
-Fluidd/Mainsail's Restart Klipper action when you are ready to load the updated
-add-on.
+`managed_services`, so updating does not restart Klipper. The
+`is_system_service: False` setting also tells Moonraker that `tca9548a` is not a
+restartable system service. Use Fluidd/Mainsail's Restart Klipper action when
+you are ready to load the updated add-on.
 
 Configure the `[tca9548a]` and `[temperature_sensor]` sections in your own
 `printer.cfg` for the sensors, I2C addresses, and mux channels actually
