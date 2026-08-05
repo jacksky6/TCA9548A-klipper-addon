@@ -22,6 +22,28 @@ The installer displays the current Git branch and asks whether to update this
 repository. It then detects the Klipper or Kalico installation and creates the
 `tca9548a.py` symbolic link in its extras directory.
 
+## Updates in Fluidd/Mainsail
+
+Fluidd and Mainsail show update status through Moonraker's Update Manager. Add
+the following section to `~/printer_data/config/moonraker.conf` after the
+initial installation:
+
+```ini
+[update_manager tca9548a]
+type: git_repo
+path: ~/TCA9548A-klipper-addon
+origin: https://github.com/jacksky6/TCA9548A-klipper-addon.git
+primary_branch: master
+install_script: install.sh
+```
+
+Restart Moonraker after saving the configuration. The update page will then
+show this repository and run `install.sh` after each update to keep the
+symbolic link in place. This configuration intentionally omits
+`managed_services`, so updating does not restart Klipper. After the first
+manual installation, use Fluidd/Mainsail's Firmware Restart when you are ready
+to load the add-on.
+
 Configure the `[tca9548a]` and `[temperature_sensor]` sections in your own
 `printer.cfg` for the sensors, I2C addresses, and mux channels actually
 connected to your hardware. Do not copy an example configuration unchanged.
