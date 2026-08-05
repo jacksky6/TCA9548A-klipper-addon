@@ -14,6 +14,28 @@ The mux implementation is kept independent of reader-specific code. PN532
 support is integrated by the Happy-Hare-RFID-Reader project, which uses this
 repository's mux and I2C infrastructure from its own PN532 adapter.
 
+## Hardware and Wiring
+
+![TCA9548A HW-617 breakout board](images/TCA9548A.jpg)
+
+The image shows the commonly available HW-617 TCA9548A breakout board. Connect
+its upstream bus pins to the MCU or controller board as follows:
+
+| TCA9548A pin | Connection |
+| --- | --- |
+| `VIN` | 3.3V or 5V supply |
+| `GND` | Controller ground |
+| `SDA` | Controller I2C SDA |
+| `SCL` | Controller I2C SCL |
+| `RST` | Leave unconnected |
+| `A0`, `A1`, `A2` | Leave unconnected for the default I2C address `0x70` (decimal `112`) |
+
+Connect each downstream device's SDA/SCL pair to one matching mux channel:
+`SD0`/`SC0` for channel 0 through `SD7`/`SC7` for channel 7. Supply power and
+ground to downstream devices separately. Devices with the same I2C address can
+be used on different mux channels, because only the selected channel is
+connected to the upstream I2C bus.
+
 ## Install
 
 Run the following on the Klipper or Kalico host:
