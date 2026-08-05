@@ -16,7 +16,9 @@ repository's mux and I2C infrastructure from its own PN532 adapter.
 
 ## Hardware and Wiring
 
-![TCA9548A HW-617 breakout board](images/TCA9548A.jpg)
+<p align="center">
+  <img src="images/TCA9548A.jpg" alt="TCA9548A HW-617 breakout board" width="50%">
+</p>
 
 The image shows the commonly available HW-617 TCA9548A breakout board. Connect
 its upstream bus pins to the MCU or controller board as follows:
