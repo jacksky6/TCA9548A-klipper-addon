@@ -18,9 +18,25 @@ cd TCA9548A-klipper-addon
 ./install.sh
 ```
 
-The installer displays the current Git branch and asks whether to update this
-repository. It then detects the Klipper or Kalico installation and creates the
-`tca9548a.py` symbolic link in its extras directory.
+The installer displays the current Git branch, attempts a fast-forward Git
+update when the directory is a Git checkout, then detects the Klipper or
+Kalico installation and creates the
+`tca9548a.py` symbolic link in its extras directory. It does not restart
+Klipper or Kalico; use Fluidd/Mainsail's Restart Klipper action after
+installation.
+
+## Uninstall
+
+Remove the installed symbolic link with either command:
+
+```bash
+./install.sh --uninstall
+# Or: ./install.sh -u
+```
+
+The repository directory is retained. If you configured Moonraker updates,
+manually remove the `[update_manager tca9548a]` section from `moonraker.conf`,
+restart Moonraker, then use Fluidd/Mainsail's Restart Klipper action.
 
 ## Updates in Fluidd/Mainsail
 
@@ -39,10 +55,12 @@ install_script: install.sh
 
 Restart Moonraker after saving the configuration. The update page will then
 show this repository and run `install.sh` after each update to keep the
-symbolic link in place. This configuration intentionally omits
-`managed_services`, so updating does not restart Klipper. After the first
-manual installation, use Fluidd/Mainsail's Firmware Restart when you are ready
-to load the add-on.
+symbolic link in place. The script has no interactive prompts: it attempts a
+fast-forward Git update and replaces an existing symbolic link, but refuses to
+overwrite a regular file. This configuration intentionally omits
+`managed_services`, so updating does not restart Klipper. Use
+Fluidd/Mainsail's Restart Klipper action when you are ready to load the updated
+add-on.
 
 Configure the `[tca9548a]` and `[temperature_sensor]` sections in your own
 `printer.cfg` for the sensors, I2C addresses, and mux channels actually

@@ -6,23 +6,37 @@ SOURCE_FILE="${SCRIPT_DIR}/tca9548a.py"
 FIRMWARE_DIR="${FIRMWARE_DIR:-${KLIPPER_DIR:-}}"
 FIRMWARE_NAME=""
 TARGET_DIR=""
+UNINSTALL=0
 
 usage() {
-    echo "Usage: $0 [--firmware-dir PATH]"
-    echo "Install tca9548a.py as a symbolic link in Klipper or Kalico extras."
+    echo "Usage: $0 [--firmware-dir PATH] [-u|--uninstall]"
+    echo "Install or uninstall the tca9548a.py symbolic link in Klipper or Kalico extras."
 }
 
-if [[ $# -gt 0 ]]; then
-    if [[ $# -eq 2 && ( "$1" == "--firmware-dir" || "$1" == "--klipper-dir" ) ]]; then
-        FIRMWARE_DIR="$2"
-    elif [[ $# -eq 1 && "$1" == "--help" ]]; then
-        usage
-        exit 0
-    else
-        usage
-        exit 2
-    fi
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -u|--uninstall)
+            UNINSTALL=1
+            shift
+            ;;
+        --firmware-dir|--klipper-dir)
+            if [[ $# -lt 2 ]]; then
+                usage
+                exit 2
+            fi
+            FIRMWARE_DIR="$2"
+            shift 2
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+done
 
 detect_firmware() {
     if [[ -z "${FIRMWARE_DIR}" ]]; then
@@ -61,56 +75,58 @@ detect_firmware() {
     fi
 }
 
-if [[ ! -f "${SOURCE_FILE}" ]]; then
-    echo "Source file not found: ${SOURCE_FILE}" >&2
-    exit 1
-fi
+if [[ "${UNINSTALL}" -eq 0 ]]; then
+    if [[ ! -f "${SOURCE_FILE}" ]]; then
+        echo "Source file not found: ${SOURCE_FILE}" >&2
+        exit 1
+    fi
 
-BRANCH="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
-if [[ -z "${BRANCH}" ]]; then
-    BRANCH="detached at $(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-fi
-echo "Repository branch: ${BRANCH}"
+    BRANCH="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
+    if [[ -z "${BRANCH}" ]]; then
+        BRANCH="detached at $(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    fi
+    echo "Repository branch: ${BRANCH}"
 
-read -r -p "Update this repository with git pull --ff-only before installation? [y/N] " ANSWER
-case "${ANSWER}" in
-    [yY]|[yY][eE][sS])
-        if ! git -C "${SCRIPT_DIR}" diff --quiet || \
-           ! git -C "${SCRIPT_DIR}" diff --cached --quiet; then
-            echo "Tracked local changes found; skipping repository update."
-        elif ! git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref \
-                --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
-            echo "No upstream branch is configured; skipping repository update."
-        elif ! git -C "${SCRIPT_DIR}" pull --ff-only; then
-            echo "Repository update failed; installation cancelled." >&2
-            exit 1
+    if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "Updating repository with git pull --ff-only..."
+        if ! git -C "${SCRIPT_DIR}" pull --ff-only; then
+            echo "Repository update failed; continuing with the local files." >&2
         fi
-        ;;
-    *)
-        echo "Repository update skipped."
-        ;;
-esac
+    else
+        echo "Repository is not a Git checkout; continuing with the local files."
+    fi
+fi
 
 detect_firmware
 echo "Detected firmware: ${FIRMWARE_NAME} (${FIRMWARE_DIR})"
 TARGET_FILE="${TARGET_DIR}/tca9548a.py"
 
-if [[ -e "${TARGET_FILE}" || -L "${TARGET_FILE}" ]]; then
-    if [[ -L "${TARGET_FILE}" && "$(readlink "${TARGET_FILE}")" == "${SOURCE_FILE}" ]]; then
-        echo "Symbolic link is already installed: ${TARGET_FILE}"
-        exit 0
+if [[ "${UNINSTALL}" -eq 1 ]]; then
+    if [[ -L "${TARGET_FILE}" ]]; then
+        rm -- "${TARGET_FILE}"
+        echo "Removed symbolic link: ${TARGET_FILE}"
+    elif [[ -e "${TARGET_FILE}" ]]; then
+        echo "Target exists and is not a symbolic link: ${TARGET_FILE}" >&2
+        echo "Refusing to remove it." >&2
+        exit 1
+    else
+        echo "No symbolic link is installed at: ${TARGET_FILE}"
     fi
-    read -r -p "Target already exists: ${TARGET_FILE}. Replace it? [y/N] " ANSWER
-    case "${ANSWER}" in
-        [yY]|[yY][eE][sS])
-            rm -- "${TARGET_FILE}"
-            ;;
-        *)
-            echo "Installation cancelled."
-            exit 1
-            ;;
-    esac
+    echo "Manually remove the [update_manager tca9548a] section from moonraker.conf if configured."
+    echo "Restart Moonraker, then restart Klipper or Kalico from Fluidd or Mainsail."
+    exit 0
+fi
+
+if [[ -L "${TARGET_FILE}" ]]; then
+    rm -- "${TARGET_FILE}"
+    echo "Replaced existing symbolic link: ${TARGET_FILE}"
+elif [[ -e "${TARGET_FILE}" ]]; then
+    echo "Target exists and is not a symbolic link: ${TARGET_FILE}" >&2
+    echo "Refusing to overwrite it." >&2
+    exit 1
 fi
 
 ln -s "${SOURCE_FILE}" "${TARGET_FILE}"
 echo "Installed symbolic link: ${TARGET_FILE} -> ${SOURCE_FILE}"
+
+echo "Restart Klipper or Kalico from Fluidd or Mainsail before using the add-on."
