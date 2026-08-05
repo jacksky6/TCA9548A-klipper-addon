@@ -1,11 +1,18 @@
 # TCA9548A Klipper Add-on
 
-Experimental Klipper add-on for testing AHT sensors behind a TCA9548A I2C
-multiplexer.
+Klipper add-on providing TCA9548A I2C multiplexer support. It manages channel
+selection and serialized access to devices behind the mux, and provides Klipper
+temperature-sensor adapters for AHT1x, AHT2x, AHT3x, BME280, and SHT3X sensors.
 
-The first goal is a small feasibility test: keep Klipper changes minimal, add a
-small set of AHT temperature sensor types, and select the mux channel before
-each AHT I2C operation.
+The project was originally created for [EMU](https://github.com/DW-Tas/EMU)
+deployments where MMB/AFC control boards do not provide enough I2C interfaces
+for all required devices. A TCA9548A allows multiple downstream devices to
+share one hardware I2C bus while remaining independently addressable by mux
+channel.
+
+The mux implementation is kept independent of reader-specific code. PN532
+support is integrated by the Happy-Hare-RFID-Reader project, which uses this
+repository's mux and I2C infrastructure from its own PN532 adapter.
 
 ## Install
 
