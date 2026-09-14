@@ -372,8 +372,15 @@ class MuxedI2C:
     def i2c_write(self, data, minclock=0, reqclock=0, retry=True):
         if not self._select_locked():
             return None
-        return self.i2c.i2c_write(data, minclock=minclock,
-                                  reqclock=reqclock, retry=retry)
+        try:
+            return self.i2c.i2c_write(data, minclock=minclock,
+                                      reqclock=reqclock, retry=retry)
+        except TypeError as exc:
+            # Older Klipper releases do not expose retry on i2c_write().
+            if "unexpected keyword argument 'retry'" not in str(exc):
+                raise
+            return self.i2c.i2c_write(data, minclock=minclock,
+                                      reqclock=reqclock)
 
     def i2c_read(self, write, read_len, retry=True):
         if not self._select_locked():
