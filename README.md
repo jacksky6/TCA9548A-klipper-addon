@@ -29,7 +29,7 @@ its upstream bus pins to the MCU or controller board as follows:
 | `GND` | Controller ground |
 | `SDA` | Controller I2C SDA |
 | `SCL` | Controller I2C SCL |
-| `RST` | Leave unconnected |
+| `RST` | Pull up to `VIN`/VCC through a resistor; do not leave floating. An optional open-drain MCU GPIO may pull it low for reset. |
 | `A0`, `A1`, `A2` | Leave unconnected for the default I2C address `0x70` (decimal `112`) |
 
 Connect each downstream device's SDA/SCL pair to one matching mux channel:
