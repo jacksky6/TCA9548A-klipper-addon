@@ -80,7 +80,7 @@ initial installation:
 type: git_repo
 path: ~/TCA9548A-klipper-addon
 origin: https://github.com/jacksky6/TCA9548A-klipper-addon.git
-primary_branch: master
+primary_branch: main
 install_script: install.sh
 is_system_service: False
 ```
