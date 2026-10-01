@@ -2,7 +2,7 @@
 set -u
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-SOURCE_FILE="${SCRIPT_DIR}/tca9548a.py"
+ADDON_PATHS=("tca9548a.py" "tca9548a_drivers")
 FIRMWARE_DIR="${FIRMWARE_DIR:-${KLIPPER_DIR:-}}"
 FIRMWARE_NAME=""
 TARGET_DIR=""
@@ -10,7 +10,7 @@ UNINSTALL=0
 
 usage() {
     echo "Usage: $0 [--firmware-dir PATH] [-u|--uninstall]"
-    echo "Install or uninstall the tca9548a.py symbolic link in Klipper or Kalico extras."
+    echo "Install or uninstall TCA9548A symbolic links in Klipper or Kalico extras."
 }
 
 while [[ $# -gt 0 ]]; do
@@ -76,10 +76,13 @@ detect_firmware() {
 }
 
 if [[ "${UNINSTALL}" -eq 0 ]]; then
-    if [[ ! -f "${SOURCE_FILE}" ]]; then
-        echo "Source file not found: ${SOURCE_FILE}" >&2
-        exit 1
-    fi
+    for addon_path in "${ADDON_PATHS[@]}"; do
+        source_path="${SCRIPT_DIR}/${addon_path}"
+        if [[ ! -e "${source_path}" ]]; then
+            echo "Add-on source not found: ${source_path}" >&2
+            exit 1
+        fi
+    done
 
     BRANCH="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
     if [[ -z "${BRANCH}" ]]; then
@@ -99,34 +102,44 @@ fi
 
 detect_firmware
 echo "Detected firmware: ${FIRMWARE_NAME} (${FIRMWARE_DIR})"
-TARGET_FILE="${TARGET_DIR}/tca9548a.py"
+
+validate_target_paths() {
+    for addon_path in "${ADDON_PATHS[@]}"; do
+        target_path="${TARGET_DIR}/${addon_path}"
+        if [[ -e "${target_path}" && ! -L "${target_path}" ]]; then
+            echo "Target exists and is not a symbolic link: ${target_path}" >&2
+            echo "Refusing to overwrite or remove it." >&2
+            exit 1
+        fi
+    done
+}
 
 if [[ "${UNINSTALL}" -eq 1 ]]; then
-    if [[ -L "${TARGET_FILE}" ]]; then
-        rm -- "${TARGET_FILE}"
-        echo "Removed symbolic link: ${TARGET_FILE}"
-    elif [[ -e "${TARGET_FILE}" ]]; then
-        echo "Target exists and is not a symbolic link: ${TARGET_FILE}" >&2
-        echo "Refusing to remove it." >&2
-        exit 1
-    else
-        echo "No symbolic link is installed at: ${TARGET_FILE}"
-    fi
+    validate_target_paths
+    for addon_path in "${ADDON_PATHS[@]}"; do
+        target_path="${TARGET_DIR}/${addon_path}"
+        if [[ -L "${target_path}" ]]; then
+            rm -- "${target_path}"
+            echo "Removed symbolic link: ${target_path}"
+        else
+            echo "No symbolic link is installed at: ${target_path}"
+        fi
+    done
     echo "Manually remove the [update_manager tca9548a] section from moonraker.conf if configured."
     echo "Restart Moonraker, then restart Klipper or Kalico from Fluidd or Mainsail."
     exit 0
 fi
 
-if [[ -L "${TARGET_FILE}" ]]; then
-    rm -- "${TARGET_FILE}"
-    echo "Replaced existing symbolic link: ${TARGET_FILE}"
-elif [[ -e "${TARGET_FILE}" ]]; then
-    echo "Target exists and is not a symbolic link: ${TARGET_FILE}" >&2
-    echo "Refusing to overwrite it." >&2
-    exit 1
-fi
-
-ln -s "${SOURCE_FILE}" "${TARGET_FILE}"
-echo "Installed symbolic link: ${TARGET_FILE} -> ${SOURCE_FILE}"
+validate_target_paths
+for addon_path in "${ADDON_PATHS[@]}"; do
+    source_path="${SCRIPT_DIR}/${addon_path}"
+    target_path="${TARGET_DIR}/${addon_path}"
+    if [[ -L "${target_path}" ]]; then
+        rm -- "${target_path}"
+        echo "Replaced existing symbolic link: ${target_path}"
+    fi
+    ln -s "${source_path}" "${target_path}"
+    echo "Installed symbolic link: ${target_path} -> ${source_path}"
+done
 
 echo "Restart Klipper or Kalico from Fluidd or Mainsail before using the add-on."

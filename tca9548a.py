@@ -1,8 +1,8 @@
 """TCA9548A I2C multiplexer support for Klipper.
 
 This module selects TCA9548A channels and provides MuxedI2C, an I2C wrapper
-for devices behind the mux.  It includes Klipper temperature-sensor adapters
-for AHT1x, AHT2x, AHT3x, BME280, and SHT3X devices.
+for devices behind the mux. Sensor implementations live in the
+tca9548a_drivers package.
 
 Typical temperature-sensor configuration::
 
@@ -34,7 +34,7 @@ driver with MuxedI2C and holds a mux session for each complete PN532 operation.
 from contextlib import contextmanager
 import logging
 import greenlet
-from . import aht10, bme280, bus, sht3x
+from . import bme280, bus, sht3x
 
 TCA9548A_I2C_ADDR = 0x70
 INHERITED_I2C_OPTIONS = set([
@@ -542,84 +542,6 @@ class RecoverableMuxedI2C(MuxedI2C):
         return self._transfer(write, read_len, minclock, reqclock, retry)
 
 
-class AHTTCA9548AMixin:
-    def __init__(self, config):
-        if _has_option(config, "aht10_report_time"):
-            raise config.error(
-                "%s: aht10_report_time is not supported on TCA9548A AHT "
-                "sensors; set environment_report_time in the [tca9548a] "
-                "mux section" % (config.get_name(),))
-        self._mux = None
-        self._mux_channel = config.getint("tca9548a_channel", minval=0,
-                                          maxval=7)
-        self._debug_skip_init = config.getboolean("debug_skip_init", False)
-        self._status_patched = False
-        mux_name = config.get("tca9548a")
-        mux_section = "tca9548a %s" % (mux_name,)
-        if not config.has_section(mux_section):
-            raise config.error("Section '%s' must be defined" % (
-                mux_section,))
-        mux = config.get_printer().load_object(config, mux_section)
-        mux_config = config.getsection(mux_section)
-        super(AHTTCA9548AMixin, self).__init__(
-            MuxedSensorConfig(config, mux_config))
-        self._mux = mux
-        self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
-        mux.register_environment_sensor(self, self._mux_channel)
-        logging.info("%s %s: using TCA9548A '%s' channel %d",
-                     self.model, self.name, mux_name, self._mux_channel)
-
-    def handle_connect(self):
-        self._patch_temperature_sensor_status()
-        if self._debug_skip_init:
-            logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
-                         self.model, self.name)
-            return
-        # Sensor initialization can issue several I2C transactions and yield
-        # to the reactor; keep the channel selected for the whole sequence.
-        with self._mux.session():
-            self._init_sensor()
-        measured_time = self.reactor.monotonic()
-        print_time = self.i2c.get_mcu().estimated_print_time(measured_time)
-        self._callback(print_time, self.temp)
-        waketime = self._mux.get_environment_waketime(self)
-        self.reactor.update_timer(self.sample_timer, waketime)
-
-    def _sample_aht(self, eventtime):
-        if self._mux.is_busy():
-            return eventtime + self.report_time
-        with self._mux.session():
-            return super(AHTTCA9548AMixin, self)._sample_aht(eventtime)
-
-    def _patch_temperature_sensor_status(self):
-        if self._status_patched:
-            return
-        tsensor_name = "temperature_sensor %s" % (self.name,)
-        tsensor = self.printer.lookup_object(tsensor_name, None)
-        if tsensor is None:
-            return
-        # Klipper exposes the wrapper object's status, so publish humidity and
-        # mux metadata there without changing the native driver API.
-        original_get_status = tsensor.get_status
-        sensor = self
-
-        def get_status_with_environment(eventtime):
-            status = original_get_status(eventtime)
-            status["humidity"] = sensor.humidity
-            status["tca9548a_channel"] = sensor._mux_channel
-            return status
-
-        tsensor.get_status = get_status_with_environment
-        self._status_patched = True
-        logging.info("%s %s: exposed humidity on '%s'",
-                     self.model, self.name, tsensor_name)
-
-    def get_status(self, eventtime):
-        status = super(AHTTCA9548AMixin, self).get_status(eventtime)
-        status["tca9548a_channel"] = self._mux_channel
-        return status
-
-
 class TemperatureSensorStatusMixin:
     def _patch_temperature_sensor_status(self):
         if getattr(self, "_status_patched", False):
@@ -646,18 +568,6 @@ class TemperatureSensorStatusMixin:
         self._status_patched = True
         logging.info("%s %s: exposed environment data on '%s'",
                      self.__class__.__name__, self.name, tsensor_name)
-
-
-class AHT1xTCA9548A(AHTTCA9548AMixin, aht10.AHT1x):
-    model = "aht1x_tca9548a"
-
-
-class AHT2xTCA9548A(AHTTCA9548AMixin, aht10.AHT2x):
-    model = "aht2x_tca9548a"
-
-
-class AHT3xTCA9548A(AHTTCA9548AMixin, aht10.AHT3x):
-    model = "aht3x_tca9548a"
 
 
 class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
@@ -774,10 +684,11 @@ class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
 
 
 def _register_sensor_factory(config):
+    # Import lazily so tca9548a_drivers can import this module's public mux
+    # helpers without a module-load cycle.
+    from .tca9548a_drivers import aht
     pheaters = config.get_printer().load_object(config, "heaters")
-    pheaters.add_sensor_factory("AHT1X_TCA9548A", AHT1xTCA9548A)
-    pheaters.add_sensor_factory("AHT2X_TCA9548A", AHT2xTCA9548A)
-    pheaters.add_sensor_factory("AHT3X_TCA9548A", AHT3xTCA9548A)
+    aht.register_sensor_factories(pheaters)
     pheaters.add_sensor_factory("BME280_TCA9548A", BME280TCA9548A)
     pheaters.add_sensor_factory("SHT3X_TCA9548A", SHT3XTCA9548A)
 
