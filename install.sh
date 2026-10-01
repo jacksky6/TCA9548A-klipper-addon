@@ -11,7 +11,6 @@ UNINSTALL=0
 ALLOW_LEGACY_I2C=0
 I2C_RECOVERY_SUPPORTED=0
 I2C_RECOVERY_MIN_VERSION="v0.13.0-525-g8965958"
-I2C_RECOVERY_INTRODUCED="2026-02-07"
 
 COLOR_ENABLED=0
 COLOR_RESET=""
@@ -53,6 +52,21 @@ print_field() {
     local value="$2"
     printf '%b%-24s%b %s\n' "${COLOR_LABEL}" "${label}:" \
         "${COLOR_RESET}" "${value}"
+}
+
+print_status() {
+    local color="$1"
+    local label="$2"
+    local value="$3"
+    printf '%b%-24s%b %b%s%b\n' "${COLOR_LABEL}" "${label}:" \
+        "${COLOR_RESET}" "${color}" "${value}" "${COLOR_RESET}"
+}
+
+print_recovery_notice() {
+    print_section "I2C Recovery"
+    print_field "Applies to" "Klipper host and I2C MCU firmware"
+    print_field "Minimum version" ">= ${I2C_RECOVERY_MIN_VERSION}"
+    print_field "Important" "git pull does not update MCU firmware"
 }
 
 usage() {
@@ -154,40 +168,23 @@ detect_i2c_recovery_support() {
 }
 
 display_firmware_summary() {
-    print_section "Firmware Detection"
+    print_section "Klipper Detection"
     print_field "Firmware" "${FIRMWARE_NAME}"
-    print_field "Path" "${FIRMWARE_DIR}"
     print_field "Current version" "${FIRMWARE_VERSION}"
-    print_field "Recovery requires" ">= ${I2C_RECOVERY_MIN_VERSION}"
-    print_field "Feature introduced" "${I2C_RECOVERY_INTRODUCED}"
 }
 
 confirm_i2c_recovery_support() {
     detect_i2c_recovery_support
     display_firmware_summary
-    print_section "AHT I2C Recovery"
     if [[ "${I2C_RECOVERY_SUPPORTED}" -eq 1 ]]; then
-        print_colored "${COLOR_OK}" "Status: SUPPORTED by this host source"
-        echo ""
-        echo "The AHT driver can handle I2C NACK, START_NACK, START_READ_NACK,"
-        echo "and BUS_TIMEOUT responses without the host initiating shutdown."
-        echo "Rebuild and flash the I2C MCU from matching modern firmware."
-        echo "At runtime, i2c_status_supported confirms the actual MCU capability."
+        print_status "${COLOR_OK}" "Klipper check" "SUPPORTED"
+        print_field "Host protocol" "modern I2C status responses"
         return
     fi
 
-    print_colored "${COLOR_WARN}" "Status: LEGACY I2C PROTOCOL - RECOVERY UNAVAILABLE" >&2
-    print_colored "${COLOR_WARN}" "Required: ${I2C_RECOVERY_MIN_VERSION} or newer" >&2
-    echo "" >&2
-    echo "This host uses legacy i2c_read/i2c_write commands. Its MCU firmware" >&2
-    echo "may enter shutdown on I2C NACK, START_NACK, START_READ_NACK, or timeout" >&2
-    echo "before the AHT Python driver receives an error." >&2
-    echo "" >&2
-    echo "The add-on can still be installed, but it cannot guarantee that a" >&2
-    echo "disconnected or failed AHT sensor will not stop Klipper/Kalico." >&2
-    echo "" >&2
-    echo "To enable recovery: update ${FIRMWARE_NAME} to ${I2C_RECOVERY_MIN_VERSION}" >&2
-    echo "or newer, then rebuild and flash the I2C MCU from the same source." >&2
+    print_status "${COLOR_WARN}" "Klipper check" "LEGACY - RECOVERY UNAVAILABLE" >&2
+    print_field "Risk" "I2C failure can shut down ${FIRMWARE_NAME}" >&2
+    print_field "Required action" "update this Klipper host" >&2
 
     if [[ "${ALLOW_LEGACY_I2C}" -eq 1 ]]; then
         echo "Continuing because --allow-legacy-i2c was supplied." >&2
@@ -225,8 +222,8 @@ if [[ "${UNINSTALL}" -eq 0 ]]; then
         BRANCH="detached at $(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     fi
     print_banner
+    print_recovery_notice
     print_section "Add-on Repository"
-    print_field "Path" "${SCRIPT_DIR}"
     print_field "Branch" "${BRANCH}"
 
     if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -252,6 +249,7 @@ if [[ "${UNINSTALL}" -eq 0 ]]; then
     confirm_i2c_recovery_support
 else
     print_banner
+    print_recovery_notice
     display_firmware_summary
 fi
 
@@ -282,21 +280,20 @@ if [[ "${UNINSTALL}" -eq 1 ]]; then
     exit 0
 fi
 
+print_section "Installation"
 for addon_path in "${ADDON_PATHS[@]}"; do
     source_path="${SCRIPT_DIR}/${addon_path}"
     target_path="${TARGET_DIR}/${addon_path}"
     if [[ -L "${target_path}" ]]; then
         rm -- "${target_path}"
-        echo "Replaced existing symbolic link: ${target_path}"
     elif [[ -d "${target_path}" ]]; then
         rm -rf -- "${target_path}"
-        echo "Replaced existing directory: ${target_path}"
     elif [[ -e "${target_path}" ]]; then
         rm -- "${target_path}"
-        echo "Replaced existing file: ${target_path}"
     fi
     ln -s "${source_path}" "${target_path}"
-    echo "Installed symbolic link: ${target_path} -> ${source_path}"
+    print_status "${COLOR_OK}" "${addon_path}" "linked"
 done
 
-echo "Restart Klipper or Kalico from Fluidd or Mainsail before using the add-on."
+echo ""
+echo "Restart ${FIRMWARE_NAME} from Fluidd or Mainsail to load the add-on."

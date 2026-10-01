@@ -51,15 +51,16 @@ PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     > "${TEMPORARY_DIRECTORY}/modern.log"
 assert_installed "${TEMPORARY_DIRECTORY}/modern"
 [[ ! -e "${TEMPORARY_DIRECTORY}/modern/klippy/extras/tca9548a_drivers/_legacy_marker" ]]
-grep -Fq 'Replaced existing file:' "${TEMPORARY_DIRECTORY}/modern.log"
-grep -Fq 'Replaced existing directory:' "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Eq '^Klipper check:[[:space:]]+SUPPORTED$' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Eq '^tca9548a\.py:[[:space:]]+linked$' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Eq '^tca9548a_drivers:[[:space:]]+linked$' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Current version:         v0.13.0-772-gtest' \
     "${TEMPORARY_DIRECTORY}/modern.log"
-grep -Fq 'Recovery requires:       >= v0.13.0-525-g8965958' \
+grep -Fq 'Minimum version:         >= v0.13.0-525-g8965958' \
     "${TEMPORARY_DIRECTORY}/modern.log"
-grep -Fq 'Status: SUPPORTED by this host source' \
-    "${TEMPORARY_DIRECTORY}/modern.log"
-
 create_firmware legacy 0
 if PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     bash "${REPOSITORY}/install.sh" \
@@ -72,7 +73,7 @@ grep -Fq 'Refusing non-interactive legacy installation' \
     "${TEMPORARY_DIRECTORY}/legacy.log"
 grep -Fq 'Current version:         v0.13.0-464-gtest' \
     "${TEMPORARY_DIRECTORY}/legacy.log"
-grep -Fq 'Required: v0.13.0-525-g8965958 or newer' \
+grep -Fq 'Minimum version:         >= v0.13.0-525-g8965958' \
     "${TEMPORARY_DIRECTORY}/legacy.log"
 
 PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
