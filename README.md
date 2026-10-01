@@ -50,11 +50,43 @@ cd TCA9548A-klipper-addon
 ```
 
 The installer displays the current Git branch, attempts a fast-forward Git
-update when the directory is a Git checkout, then detects the Klipper or
-Kalico installation and creates the
-`tca9548a.py` symbolic link in its extras directory. It does not restart
-Klipper or Kalico; use Fluidd/Mainsail's Restart Klipper action after
-installation.
+update when the directory is a Git checkout, detects Klipper or Kalico, then
+creates these symbolic links in its extras directory:
+
+```text
+tca9548a.py
+tca9548a_drivers/
+```
+
+It does not restart Klipper or Kalico; use Fluidd/Mainsail's Restart Klipper
+action after installation.
+
+### AHT I2C Recovery Check
+
+During installation, the script checks the target Klipper or Kalico `bus.py`
+for the modern `i2c_transfer` protocol with `i2c_bus_status` responses.
+The result has two distinct levels:
+
+- **Supported host source:** the standalone AHT driver can receive I2C
+  `NACK`, `START_NACK`, `START_READ_NACK`, and `BUS_TIMEOUT` statuses in the
+  host instead of using Klipper's public I2C helper that turns those statuses
+  into a host shutdown. The relevant MCU must still be rebuilt and flashed
+  from matching modern firmware. The driver's `i2c_status_supported` status
+  field shows the final runtime result for the configured MCU.
+- **Legacy host source:** legacy MCU firmware calls its own `shutdown()` for
+  these I2C failures before any Python driver can handle them. The add-on is
+  compatible with that source, but cannot guarantee that a missing or failed
+  AHT sensor will not stop Klipper/Kalico. The installer explains this and
+  requests confirmation before continuing.
+
+For a deliberate non-interactive legacy installation, use:
+
+```bash
+./install.sh --allow-legacy-i2c
+```
+
+This flag only acknowledges the limitation; it does not enable recovery on an
+old host or MCU firmware.
 
 ## Uninstall
 
@@ -87,9 +119,17 @@ is_system_service: False
 
 Restart Moonraker after saving the configuration. The update page will then
 show this repository and run `install.sh` after each update to keep the
-symbolic link in place. The script has no interactive prompts: it attempts a
-fast-forward Git update and replaces an existing symbolic link, but refuses to
-overwrite a regular file. This configuration intentionally omits
+symbolic links in place. The script attempts a fast-forward Git update and
+replaces its existing symbolic links, but refuses to overwrite a regular file.
+On a legacy I2C target, Moonraker runs non-interactively and installation will
+stop at the recovery confirmation. Upgrade Klipper/Kalico and the MCU firmware,
+or explicitly acknowledge the limitation in `moonraker.conf`:
+
+```ini
+install_script: install.sh --allow-legacy-i2c
+```
+
+This configuration intentionally omits
 `managed_services`, so updating does not restart Klipper. The
 `is_system_service: False` setting also tells Moonraker that `tca9548a` is not a
 restartable system service. Use Fluidd/Mainsail's Restart Klipper action when
@@ -215,6 +255,32 @@ At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
 same mux are spread evenly across `environment_report_time` so their periodic
 polls do not all run at the same instant.
 
+## AHT Communication Recovery
+
+`AHT1X_TCA9548A`, `AHT2X_TCA9548A`, and `AHT3X_TCA9548A` are maintained by the
+add-on's standalone `tca9548a_drivers/aht.py`, rather than inheriting the
+installed Klipper/Kalico `aht10.py` driver. This lets the add-on handle
+recoverable I2C status responses without changing Klipper/Kalico itself.
+
+With a modern host and matching MCU firmware, a failed AHT initialization or
+sample does not stop its timer. The driver records the failure, retains the
+last valid temperature and humidity, marks the reading invalid, and retries a
+full AHT initialization after the shared `environment_report_time`. A
+successful retry marks the reading valid again. Repeated identical errors are
+rate-limited in `klippy.log`.
+
+The AHT object's status includes `valid`, `communication_ok`, `last_error`,
+`last_error_time`, `last_success_time`, `i2c_error_count`, `error_count`, and
+`i2c_status_supported`, as well as `tca9548a_channel`. The same fields are
+added to the linked `temperature_sensor` status when it is available.
+
+This recovery applies only to I2C transport errors and only to the AHT sensor
+types above in the current release. It does not change BME280, SHT3X, PN532, or
+other downstream device error semantics. A configured AHT `min_temp` or
+`max_temp` violation remains a normal Klipper safety shutdown. An I2C error
+does not toggle the TCA9548A `RST` pin, issue a downstream reset, or remove
+power from any downstream device.
+
 If your TCA9548A has A0/A1/A2 pulled high or low differently, adjust the mux
 `i2c_address` from the default `112` (`0x70`). Klipper expects I2C addresses in
 decimal. AHT20's `0x38` address is written as `56` in each sensor section.
@@ -264,9 +330,10 @@ unset.
 ## Notes
 
 This prototype deliberately supports only a narrow set of environment sensors.
-It wraps existing Klipper sensor drivers and re-selects the TCA9548A channel
-before every I2C write/read, which avoids relying on mux state across reactor
-pauses.
+The AHT family is a standalone driver in `tca9548a_drivers/aht.py`; BME280 and
+SHT3X currently wrap their installed Klipper/Kalico drivers. All adapters
+re-select the TCA9548A channel before every I2C write/read, which avoids
+relying on mux state across reactor pauses.
 
 ## License
 
