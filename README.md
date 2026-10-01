@@ -65,7 +65,10 @@ action after installation.
 
 During installation, the script checks the target Klipper or Kalico `bus.py`
 for the modern `i2c_transfer` protocol with `i2c_bus_status` responses.
-The result has two distinct levels:
+It displays the detected firmware path and current Git version. This protocol
+was introduced by Klipper commit `8965958a8b6c` on 2026-02-07, which is
+reported by `git describe` as `v0.13.0-525-g8965958`; use that version or a
+newer matching host and MCU firmware. The result has two distinct levels:
 
 - **Supported host source:** the standalone AHT driver can receive I2C
   `NACK`, `START_NACK`, `START_READ_NACK`, and `BUS_TIMEOUT` statuses in the

@@ -5,10 +5,55 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ADDON_PATHS=("tca9548a.py" "tca9548a_drivers")
 FIRMWARE_DIR="${FIRMWARE_DIR:-${KLIPPER_DIR:-}}"
 FIRMWARE_NAME=""
+FIRMWARE_VERSION=""
 TARGET_DIR=""
 UNINSTALL=0
 ALLOW_LEGACY_I2C=0
 I2C_RECOVERY_SUPPORTED=0
+I2C_RECOVERY_MIN_VERSION="v0.13.0-525-g8965958"
+I2C_RECOVERY_INTRODUCED="2026-02-07"
+
+COLOR_ENABLED=0
+COLOR_RESET=""
+COLOR_TITLE=""
+COLOR_LABEL=""
+COLOR_OK=""
+COLOR_WARN=""
+COLOR_ERROR=""
+
+if [[ -t 1 && "${TERM:-dumb}" != "dumb" ]]; then
+    COLOR_ENABLED=1
+    COLOR_RESET=$'\033[0m'
+    COLOR_TITLE=$'\033[1;36m'
+    COLOR_LABEL=$'\033[1;37m'
+    COLOR_OK=$'\033[1;32m'
+    COLOR_WARN=$'\033[1;33m'
+    COLOR_ERROR=$'\033[1;31m'
+fi
+
+print_colored() {
+    local color="$1"
+    shift
+    printf '%b%s%b\n' "${color}" "$*" "${COLOR_RESET}"
+}
+
+print_banner() {
+    print_colored "${COLOR_TITLE}" "+------------------------------------------------------------+"
+    print_colored "${COLOR_TITLE}" "|                 TCA9548A Add-on Installer                 |"
+    print_colored "${COLOR_TITLE}" "+------------------------------------------------------------+"
+}
+
+print_section() {
+    print_colored "${COLOR_TITLE}" ""
+    print_colored "${COLOR_TITLE}" "[ $1 ]"
+}
+
+print_field() {
+    local label="$1"
+    local value="$2"
+    printf '%b%-24s%b %s\n' "${COLOR_LABEL}" "${label}:" \
+        "${COLOR_RESET}" "${value}"
+}
 
 usage() {
     echo "Usage: $0 [--firmware-dir PATH] [--allow-legacy-i2c] [-u|--uninstall]"
@@ -81,6 +126,12 @@ detect_firmware() {
     else
         FIRMWARE_NAME="Klipper"
     fi
+
+    FIRMWARE_VERSION="$(git -C "${FIRMWARE_DIR}" describe --tags --always \
+        --dirty 2>/dev/null || true)"
+    if [[ -z "${FIRMWARE_VERSION}" ]]; then
+        FIRMWARE_VERSION="unknown (not a Git checkout)"
+    fi
 }
 
 detect_i2c_recovery_support() {
@@ -102,33 +153,41 @@ detect_i2c_recovery_support() {
     fi
 }
 
+display_firmware_summary() {
+    print_section "Firmware Detection"
+    print_field "Firmware" "${FIRMWARE_NAME}"
+    print_field "Path" "${FIRMWARE_DIR}"
+    print_field "Current version" "${FIRMWARE_VERSION}"
+    print_field "Recovery requires" ">= ${I2C_RECOVERY_MIN_VERSION}"
+    print_field "Feature introduced" "${I2C_RECOVERY_INTRODUCED}"
+}
+
 confirm_i2c_recovery_support() {
     detect_i2c_recovery_support
+    display_firmware_summary
+    print_section "AHT I2C Recovery"
     if [[ "${I2C_RECOVERY_SUPPORTED}" -eq 1 ]]; then
-        cat <<EOF
-I2C recovery check: supported by this ${FIRMWARE_NAME} host source.
-
-The AHT driver can keep Klipper/Kalico running when a modern MCU firmware
-returns an I2C status such as NACK, START_NACK, or BUS_TIMEOUT. The actual
-MCU must also be rebuilt and flashed with matching modern firmware. At runtime
-the driver's i2c_status_supported status field confirms that final capability.
-EOF
+        print_colored "${COLOR_OK}" "Status: SUPPORTED by this host source"
+        echo ""
+        echo "The AHT driver can handle I2C NACK, START_NACK, START_READ_NACK,"
+        echo "and BUS_TIMEOUT responses without the host initiating shutdown."
+        echo "Rebuild and flash the I2C MCU from matching modern firmware."
+        echo "At runtime, i2c_status_supported confirms the actual MCU capability."
         return
     fi
 
-    cat >&2 <<EOF
-I2C recovery check: NOT supported by this ${FIRMWARE_NAME} host source.
-
-This target uses the legacy i2c_read/i2c_write protocol. On that protocol the
-MCU firmware handles I2C NACK, START_NACK, START_READ_NACK, and timeout errors
-by entering shutdown before Python code can catch the error. The add-on remains
-compatible with this target, but it cannot guarantee that a disconnected or
-failed AHT sensor will not stop Klipper/Kalico.
-
-To use recoverable AHT communication, update the ${FIRMWARE_NAME} host and
-rebuild and flash the MCU firmware from the same modern source. Installing now
-keeps the legacy behavior until both sides are updated.
-EOF
+    print_colored "${COLOR_WARN}" "Status: LEGACY I2C PROTOCOL - RECOVERY UNAVAILABLE" >&2
+    print_colored "${COLOR_WARN}" "Required: ${I2C_RECOVERY_MIN_VERSION} or newer" >&2
+    echo "" >&2
+    echo "This host uses legacy i2c_read/i2c_write commands. Its MCU firmware" >&2
+    echo "may enter shutdown on I2C NACK, START_NACK, START_READ_NACK, or timeout" >&2
+    echo "before the AHT Python driver receives an error." >&2
+    echo "" >&2
+    echo "The add-on can still be installed, but it cannot guarantee that a" >&2
+    echo "disconnected or failed AHT sensor will not stop Klipper/Kalico." >&2
+    echo "" >&2
+    echo "To enable recovery: update ${FIRMWARE_NAME} to ${I2C_RECOVERY_MIN_VERSION}" >&2
+    echo "or newer, then rebuild and flash the I2C MCU from the same source." >&2
 
     if [[ "${ALLOW_LEGACY_I2C}" -eq 1 ]]; then
         echo "Continuing because --allow-legacy-i2c was supplied." >&2
@@ -165,23 +224,35 @@ if [[ "${UNINSTALL}" -eq 0 ]]; then
     if [[ -z "${BRANCH}" ]]; then
         BRANCH="detached at $(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     fi
-    echo "Repository branch: ${BRANCH}"
+    print_banner
+    print_section "Add-on Repository"
+    print_field "Path" "${SCRIPT_DIR}"
+    print_field "Branch" "${BRANCH}"
 
     if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        echo "Updating repository with git pull --ff-only..."
-        if ! git -C "${SCRIPT_DIR}" pull --ff-only; then
+        update_output="$(git -C "${SCRIPT_DIR}" pull --ff-only 2>&1)"
+        if [[ "${?}" -eq 0 ]]; then
+            if printf '%s' "${update_output}" | grep -Fq "Already up to date."; then
+                print_field "Update" "current"
+            else
+                print_field "Update" "updated"
+            fi
+        else
             echo "Repository update failed; continuing with the local files." >&2
+            printf '%s\n' "${update_output}" >&2
         fi
     else
-        echo "Repository is not a Git checkout; continuing with the local files."
+        print_field "Update" "skipped (not a Git checkout)"
     fi
 fi
 
 detect_firmware
-echo "Detected firmware: ${FIRMWARE_NAME} (${FIRMWARE_DIR})"
 
 if [[ "${UNINSTALL}" -eq 0 ]]; then
     confirm_i2c_recovery_support
+else
+    print_banner
+    display_firmware_summary
 fi
 
 validate_target_paths() {

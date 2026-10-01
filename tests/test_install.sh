@@ -11,6 +11,8 @@ cat > "${TEMPORARY_DIRECTORY}/bin/git" <<'EOF'
 case " $* " in
     *" branch --show-current "*) echo dev ;;
     *" rev-parse --is-inside-work-tree "*) echo true ;;
+    *"/modern"*" describe "*) echo v0.13.0-772-gtest ;;
+    *"/legacy"*" describe "*) echo v0.13.0-464-gtest ;;
 esac
 exit 0
 EOF
@@ -43,7 +45,12 @@ PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     --firmware-dir "${TEMPORARY_DIRECTORY}/modern" \
     > "${TEMPORARY_DIRECTORY}/modern.log"
 assert_installed "${TEMPORARY_DIRECTORY}/modern"
-grep -Fq 'I2C recovery check: supported' "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Fq 'Current version:         v0.13.0-772-gtest' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Fq 'Recovery requires:       >= v0.13.0-525-g8965958' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Fq 'Status: SUPPORTED by this host source' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
 
 create_firmware legacy 0
 if PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
@@ -54,6 +61,10 @@ if PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     exit 1
 fi
 grep -Fq 'Refusing non-interactive legacy installation' \
+    "${TEMPORARY_DIRECTORY}/legacy.log"
+grep -Fq 'Current version:         v0.13.0-464-gtest' \
+    "${TEMPORARY_DIRECTORY}/legacy.log"
+grep -Fq 'Required: v0.13.0-525-g8965958 or newer' \
     "${TEMPORARY_DIRECTORY}/legacy.log"
 
 PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
