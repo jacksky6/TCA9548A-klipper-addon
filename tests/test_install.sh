@@ -40,11 +40,19 @@ assert_installed() {
 }
 
 create_firmware modern 1
+printf '%s\n' '# Legacy standalone add-on' \
+    > "${TEMPORARY_DIRECTORY}/modern/klippy/extras/tca9548a.py"
+mkdir "${TEMPORARY_DIRECTORY}/modern/klippy/extras/tca9548a_drivers"
+printf '%s\n' '# Legacy driver package' \
+    > "${TEMPORARY_DIRECTORY}/modern/klippy/extras/tca9548a_drivers/_legacy_marker"
 PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     bash "${REPOSITORY}/install.sh" \
     --firmware-dir "${TEMPORARY_DIRECTORY}/modern" \
     > "${TEMPORARY_DIRECTORY}/modern.log"
 assert_installed "${TEMPORARY_DIRECTORY}/modern"
+[[ ! -e "${TEMPORARY_DIRECTORY}/modern/klippy/extras/tca9548a_drivers/_legacy_marker" ]]
+grep -Fq 'Replaced existing file:' "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Fq 'Replaced existing directory:' "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Current version:         v0.13.0-772-gtest' \
     "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Recovery requires:       >= v0.13.0-525-g8965958' \

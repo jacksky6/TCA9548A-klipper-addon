@@ -58,6 +58,11 @@ tca9548a.py
 tca9548a_drivers/
 ```
 
+For upgrade compatibility, the installer removes an existing symbolic link,
+regular file, or directory at either of these two exact paths, then recreates
+the current symbolic links. This migrates old one-file installations and old
+driver directories automatically.
+
 It does not restart Klipper or Kalico; use Fluidd/Mainsail's Restart Klipper
 action after installation.
 
@@ -123,7 +128,8 @@ is_system_service: False
 Restart Moonraker after saving the configuration. The update page will then
 show this repository and run `install.sh` after each update to keep the
 symbolic links in place. The script attempts a fast-forward Git update and
-replaces its existing symbolic links, but refuses to overwrite a regular file.
+replaces any existing file, directory, or symbolic link at its two add-on
+paths before recreating the current symbolic links.
 On a legacy I2C target, Moonraker runs non-interactively and installation will
 stop at the recovery confirmation. Upgrade Klipper/Kalico and the MCU firmware,
 or explicitly acknowledge the limitation in `moonraker.conf`:

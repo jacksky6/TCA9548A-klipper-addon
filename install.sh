@@ -255,7 +255,7 @@ else
     display_firmware_summary
 fi
 
-validate_target_paths() {
+validate_uninstall_paths() {
     for addon_path in "${ADDON_PATHS[@]}"; do
         target_path="${TARGET_DIR}/${addon_path}"
         if [[ -e "${target_path}" && ! -L "${target_path}" ]]; then
@@ -267,7 +267,7 @@ validate_target_paths() {
 }
 
 if [[ "${UNINSTALL}" -eq 1 ]]; then
-    validate_target_paths
+    validate_uninstall_paths
     for addon_path in "${ADDON_PATHS[@]}"; do
         target_path="${TARGET_DIR}/${addon_path}"
         if [[ -L "${target_path}" ]]; then
@@ -282,13 +282,18 @@ if [[ "${UNINSTALL}" -eq 1 ]]; then
     exit 0
 fi
 
-validate_target_paths
 for addon_path in "${ADDON_PATHS[@]}"; do
     source_path="${SCRIPT_DIR}/${addon_path}"
     target_path="${TARGET_DIR}/${addon_path}"
     if [[ -L "${target_path}" ]]; then
         rm -- "${target_path}"
         echo "Replaced existing symbolic link: ${target_path}"
+    elif [[ -d "${target_path}" ]]; then
+        rm -rf -- "${target_path}"
+        echo "Replaced existing directory: ${target_path}"
+    elif [[ -e "${target_path}" ]]; then
+        rm -- "${target_path}"
+        echo "Replaced existing file: ${target_path}"
     fi
     ln -s "${source_path}" "${target_path}"
     echo "Installed symbolic link: ${target_path} -> ${source_path}"
