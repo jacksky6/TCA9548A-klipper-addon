@@ -50,6 +50,82 @@ def _has_option(config, option):
     return config.fileconfig.has_option(config.get_name(), option)
 
 
+class I2CStatusError(Exception):
+    """An I2C failure reported by the modern i2c_transfer protocol."""
+
+    def __init__(self, i2c, status, operation, write_len, read_len):
+        self.status = status
+        self.operation = operation
+        self.write_len = write_len
+        self.read_len = read_len
+        self.i2c_address = i2c.get_i2c_address()
+        self.mcu_name = i2c.get_mcu().get_name()
+        Exception.__init__(
+            self, "MCU '%s' I2C request to addr %i reports error %s "
+            "during %s" % (self.mcu_name, self.i2c_address, status,
+                             operation))
+
+
+class MuxSelectionError(Exception):
+    """A downstream operation could not select its TCA9548A channel."""
+
+    def __init__(self, mux_name, channel):
+        self.mux_name = mux_name
+        self.channel = channel
+        Exception.__init__(
+            self, "TCA9548A '%s' could not select channel %d" % (
+                mux_name, channel))
+
+
+def i2c_status_supported(i2c):
+    """Return whether an MCU I2C object reports transfer status to the host."""
+    command = getattr(i2c, "i2c_transfer_cmd", None)
+    if command is None:
+        return False
+    # File output replaces the query command with a write-only command, so it
+    # cannot provide a status response.
+    return not i2c.get_mcu().is_fileoutput()
+
+
+def _legacy_i2c_write(i2c, data, minclock, reqclock, retry):
+    try:
+        return i2c.i2c_write(data, minclock=minclock, reqclock=reqclock,
+                             retry=retry)
+    except TypeError as exc:
+        # Older Klipper releases do not expose retry on i2c_write().
+        if "unexpected keyword argument 'retry'" not in str(exc):
+            raise
+        return i2c.i2c_write(data, minclock=minclock, reqclock=reqclock)
+
+
+def i2c_transfer_recoverable(i2c, write, read_len=0, minclock=0,
+                             reqclock=0, retry=True, operation="transfer"):
+    """Perform one transfer without bus.py escalating a reported error.
+
+    Modern MCU firmware returns i2c_bus_status in i2c_response. Klipper's
+    public MCU_I2C methods convert a non-success status into shutdown, so
+    callers that can recover must issue the query command directly. Legacy
+    firmware has no recoverable status path and retains its native behavior.
+    """
+    write = list(write)
+    if not i2c_status_supported(i2c):
+        if read_len:
+            return i2c.i2c_read(write, read_len, retry=retry)
+        _legacy_i2c_write(i2c, write, minclock, reqclock, retry)
+        return None
+
+    params = i2c.i2c_transfer_cmd.send(
+        [i2c.get_oid(), write, read_len], minclock=minclock,
+        reqclock=reqclock, retry=retry)
+    if params is None:
+        raise I2CStatusError(i2c, "MALFORMED_RESPONSE", operation,
+                             len(write), read_len)
+    status = params.get("i2c_bus_status", "MALFORMED_RESPONSE")
+    if status != "SUCCESS":
+        raise I2CStatusError(i2c, status, operation, len(write), read_len)
+    return params
+
+
 class MuxedSensorConfig:
     # Reuse Klipper's native sensor drivers while letting the mux section
     # supply the shared I2C settings.  I2C transport settings in a downstream
@@ -112,6 +188,7 @@ class TCA9548A:
         self.last_control = None
         self._reported_select_failures = set()
         self._reported_session_access_failures = set()
+        self._reported_i2c_failures = set()
         self._session_owner = None
         self._session_depth = 0
         self.environment_sensors = []
@@ -172,7 +249,14 @@ class TCA9548A:
             return True
         # Wait for the mux write to complete before a downstream device can
         # submit its first I2C transaction on the selected channel.
-        self.i2c.i2c_write([value])
+        try:
+            i2c_transfer_recoverable(
+                self.i2c, [value], operation="TCA9548A control write")
+        except I2CStatusError as exc:
+            self.last_control = self.last_channel = None
+            self._report_i2c_failure(exc)
+            return False
+        self._reported_i2c_failures.clear()
         if self.select_delay:
             self.reactor.pause(self.reactor.monotonic() + self.select_delay)
         if self.verify_select:
@@ -226,7 +310,14 @@ class TCA9548A:
         return False
 
     def _read_control_locked(self):
-        params = self.i2c.i2c_read([], 1)
+        try:
+            params = i2c_transfer_recoverable(
+                self.i2c, [], 1, operation="TCA9548A control read")
+        except I2CStatusError as exc:
+            self.last_control = self.last_channel = None
+            self._report_i2c_failure(exc)
+            return None
+        self._reported_i2c_failures.clear()
         if params is None:
             return None
         response = params.get("response")
@@ -267,6 +358,16 @@ class TCA9548A:
         logging.error(message)
         self.gcode.respond_info(message)
 
+    def _report_i2c_failure(self, error):
+        key = (error.operation, error.status)
+        if key in self._reported_i2c_failures:
+            return
+        self._reported_i2c_failures.add(key)
+        message = "TCA9548A '%s': %s; channel state is unknown" % (
+            self.name, error)
+        logging.error(message)
+        self.gcode.respond_info(message)
+
     def select_channel(self, channel):
         with self.mutex:
             return self._select_channel_locked(channel)
@@ -293,6 +394,7 @@ class TCA9548A:
             "i2c_mcu": self.config_mcu,
             "i2c_bus": self.config_bus,
             "i2c_address": self.config_address,
+            "i2c_status_supported": i2c_status_supported(self.i2c),
             "environment_report_time": self.environment_report_time,
             "environment_sensor_count": len(self.environment_sensors),
         }
@@ -325,8 +427,11 @@ class TCA9548A:
             self.last_channel = int(channels[0])
         channel_text = ",".join(channels) if channels else "none"
         gcmd.respond_info(
-            "TCA9548A '%s': control=0x%02x active_channels=%s" % (
-                self.name, value, channel_text))
+            "TCA9548A '%s': control=0x%02x active_channels=%s "
+            "i2c_status=%s" % (
+                self.name, value, channel_text,
+                "supported" if i2c_status_supported(self.i2c)
+                else "legacy"))
 
 
 class MuxedI2C:
@@ -394,6 +499,47 @@ class MuxedI2C:
         return self.i2c.i2c_transfer(write, read_len=read_len,
                                      minclock=minclock, reqclock=reqclock,
                                      retry=retry)
+
+
+class RecoverableMuxedI2C(MuxedI2C):
+    """Muxed I2C wrapper for a device that can recover from bus errors."""
+
+    def __init__(self, mux, channel, i2c):
+        MuxedI2C.__init__(self, mux, channel, i2c)
+        self.last_error = None
+
+    @property
+    def status_supported(self):
+        return i2c_status_supported(self.i2c)
+
+    def clear_error(self):
+        self.last_error = None
+
+    def _transfer(self, write, read_len=0, minclock=0, reqclock=0,
+                  retry=True, operation="transfer"):
+        if not self._select_locked():
+            error = MuxSelectionError(self.mux.name, self.channel)
+            self.last_error = error
+            raise error
+        try:
+            return i2c_transfer_recoverable(
+                self.i2c, write, read_len, minclock, reqclock, retry,
+                operation)
+        except Exception as exc:
+            self.last_error = exc
+            raise
+
+    def i2c_write(self, data, minclock=0, reqclock=0, retry=True):
+        self._transfer(data, minclock=minclock, reqclock=reqclock,
+                       retry=retry, operation="write")
+
+    def i2c_read(self, write, read_len, retry=True):
+        return self._transfer(write, read_len, retry=retry,
+                              operation="read")
+
+    def i2c_transfer(self, write, read_len=0, minclock=0, reqclock=0,
+                     retry=True):
+        return self._transfer(write, read_len, minclock, reqclock, retry)
 
 
 class AHTTCA9548AMixin:
