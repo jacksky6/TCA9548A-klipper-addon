@@ -77,7 +77,7 @@ PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     > "${TEMPORARY_DIRECTORY}/modern.log"
 assert_installed "${TEMPORARY_DIRECTORY}/modern"
 [[ ! -e "${TEMPORARY_DIRECTORY}/modern/klippy/extras/tca9548a_drivers/_legacy_marker" ]]
-grep -Eq '^Klipper check:[[:space:]]+SUPPORTED$' \
+grep -Eq '^Feature support:[[:space:]]+SUPPORTED$' \
     "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Eq '^tca9548a\.py:[[:space:]]+linked$' \
     "${TEMPORARY_DIRECTORY}/modern.log"

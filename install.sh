@@ -416,7 +416,7 @@ check_repository_update() {
 }
 
 display_firmware_summary() {
-    print_section "Klipper Detection"
+    print_section "I2C Recovery Feature Support"
     print_field "Firmware" "${FIRMWARE_NAME}"
     print_field "Current version" "${FIRMWARE_VERSION}"
 }
@@ -425,12 +425,12 @@ confirm_i2c_recovery_support() {
     detect_i2c_recovery_support
     display_firmware_summary
     if [[ "${I2C_RECOVERY_SUPPORTED}" -eq 1 ]]; then
-        print_status "${COLOR_OK}" "Klipper check" "SUPPORTED"
+        print_status "${COLOR_OK}" "Feature support" "SUPPORTED"
         print_field "Host protocol" "modern I2C status responses"
         return
     fi
 
-    print_status "${COLOR_WARN}" "Klipper check" "LEGACY - RECOVERY UNAVAILABLE" >&2
+    print_status "${COLOR_WARN}" "Feature support" "LEGACY - RECOVERY UNAVAILABLE" >&2
     print_field "Risk" "I2C failure can shut down ${FIRMWARE_NAME}" >&2
     print_field "Required action" "update this Klipper host" >&2
 
