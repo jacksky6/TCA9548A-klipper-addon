@@ -42,6 +42,8 @@ def _load_driver_modules():
     sht3x.SHT3X = type("SHT3X", (), {})
     sys.modules[sht3x.__name__] = sht3x
     core = _load_module("klippy.extras.tca9548a", REPOSITORY / "tca9548a.py")
+    _load_module("klippy.extras.tca9548a_drivers.recovery",
+                 REPOSITORY / "tca9548a_drivers" / "recovery.py")
     driver = _load_module(
         "klippy.extras.tca9548a_drivers.aht",
         REPOSITORY / "tca9548a_drivers" / "aht.py")
