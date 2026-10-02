@@ -388,10 +388,11 @@ from any supported type does not stop its timer. The driver records the
 failure, marks the reading invalid, and retries a full sensor initialization
 after the shared `environment_report_time`. By default it retains the last
 valid temperature and humidity; the two mux-level `zero_*_on_error` options can
-independently report zero for either value. BME280 pressure always retains its
-last valid value. A successful retry marks the reading valid again. Repeated
-identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail Console
-shows failure stage, I2C status, and retry interval, for example
+independently report zero for either value. BME280 calculates pressure
+internally but does not publish it, so it presents the same temperature and
+humidity fields as AHT. A successful retry marks the reading valid again.
+Repeated identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail
+Console shows failure stage, I2C status, and retry interval, for example
 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`, as
 Klipper error lines, so they use the frontend's error color. A later retry may
 report `initialization failed` after a measurement failure; it is

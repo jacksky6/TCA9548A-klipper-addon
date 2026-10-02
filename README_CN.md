@@ -328,9 +328,9 @@ Klipper 启动时，每个复用器会记录环境传感器调度计划。同一
 使用现代主机和匹配 MCU 固件时，任一受支持类型的初始化或采样失败都不会停止其定时器。
 驱动会记录失败、将读数标为无效，并在共享的 `environment_report_time` 后重试完整传感器
 初始化。默认保留最后一次有效的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让
-温度或湿度报告为零。BME280 的气压始终保留最后一次有效值。重试成功后读数会重新有效。
-相同错误在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C 状态和
-重试间隔，例如 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`，
+温度或湿度报告为零。BME280 会在内部计算气压，但不发布该值，因此对外展示的温湿度字段与 AHT
+一致。重试成功后读数会重新有效。相同错误在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C
+状态和重试间隔，例如 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`，
 并将其作为 Klipper 错误行显示，因而使用前端的错误颜色。测量失败后的后续重试若显示
 `initialization failed`，表示驱动正在再次采样前重新初始化传感器。详细的 MCU、地址、
 操作和异常信息仍保留在 `klippy.log`。

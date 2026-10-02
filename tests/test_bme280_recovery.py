@@ -292,7 +292,7 @@ class BME280RecoveryTests(unittest.TestCase):
             lambda print_time, temp: published.append((print_time, temp)))
         return sensor, published
 
-    def test_failed_sample_retries_and_preserves_pressure(self):
+    def test_failed_sample_retries_and_preserves_internal_values(self):
         sensor, published = self._make_sensor([
             success(),  # initialization
             success([0] * 8),  # initial sample
@@ -344,6 +344,19 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertEqual((sensor.temp, sensor.humidity, sensor.pressure),
                          (0., 45., 1005.))
         self.assertEqual(published, [(0., 24.), (20., 0.)])
+
+    def test_status_hides_pressure_to_match_aht(self):
+        sensor, _ = self._make_sensor([
+            success(),
+            success([0] * 8),
+        ])
+        sensor.handle_connect()
+
+        status = sensor.get_status(self.reactor.monotonic())
+
+        self.assertEqual(status["temperature"], 24.)
+        self.assertEqual(status["humidity"], 45.)
+        self.assertNotIn("pressure", status)
 
     def test_initialization_failure_retries_without_shutdown(self):
         sensor, published = self._make_sensor([

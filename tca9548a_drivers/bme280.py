@@ -127,6 +127,10 @@ class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
 
     def get_status(self, eventtime):
         status = super(BME280TCA9548A, self).get_status(eventtime)
+        # Keep the public BME280_TCA9548A data shape aligned with AHT.
+        # Klipper's BME280 implementation still calculates pressure internally
+        # as part of its normal measurement flow.
+        status.pop("pressure", None)
         status.update(self._get_environment_recovery_status())
         return status
 
