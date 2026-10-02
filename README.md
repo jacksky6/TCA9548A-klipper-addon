@@ -110,8 +110,9 @@ original TCA control operation once. Automatic attempts are limited to one per
 that fault later
 prevents access to the TCA control register, the resulting TCA error triggers
 the hardware recovery. If post-reset verification fails, no further TCA
-control or downstream I2C transfers are submitted until the same recovery
-cooldown expires. This avoids repeatedly submitting timeouts to a stuck bus.
+control or downstream I2C transfers are submitted for one
+`environment_report_time` interval. This avoids repeatedly submitting timeouts
+to a stuck bus.
 
 The Console reports an automatic attempt as a short red error line, for
 example `TCA9548A mux1: BUS_TIMEOUT; hardware reset`, followed by a normal
