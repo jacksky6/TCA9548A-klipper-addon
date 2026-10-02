@@ -114,6 +114,14 @@ control or downstream I2C transfers are submitted for one
 `environment_report_time` interval. This avoids repeatedly submitting timeouts
 to a stuck bus.
 
+After five consecutive automatic reset attempts fail verification, the mux
+stops all automatic TCA and downstream I2C activity. The Console identifies
+the final verification failure and advises checking `RESET#` wiring and TCA
+power. After repairing the fault, run `TCA_RESET MUX=mux1`; power-cycle the
+printer if that reset still cannot be verified. A verified reset or successful
+TCA control access clears the consecutive-failure count. A downstream sensor
+error alone does not count toward this limit.
+
 The Console reports an automatic attempt as a short red error line, for
 example `TCA9548A mux1: BUS_TIMEOUT; hardware reset`, followed by a normal
 `reset verified; retrying` line when verification succeeds. A verification
