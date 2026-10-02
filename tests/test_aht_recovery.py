@@ -703,7 +703,8 @@ class AHTRecoveryTests(unittest.TestCase):
 
         sensor._record_failure("measurement", error)
         self.assertEqual(self.printer.gcode.raw_responses, [
-            "!! TCA9548A AHT chamber: START_NACK; retry 30s",
+            "!! TCA9548A AHT chamber: measurement failed: START_NACK; "
+            "retry in 30s",
         ])
         self.assertEqual(self.printer.gcode.responses, [])
 
@@ -713,8 +714,8 @@ class AHTRecoveryTests(unittest.TestCase):
 
         sensor._record_failure("measurement", error)
         self.assertEqual(self.printer.gcode.raw_responses[-1],
-                         "!! TCA9548A AHT chamber: still failing "
-                         "(120 attempts)")
+                         "!! TCA9548A AHT chamber: measurement still "
+                         "failing: START_NACK (120 attempts)")
         self.assertEqual(len(self.printer.gcode.raw_responses), 2)
 
         self.assertIsNone(sensor.last_success_time)
@@ -743,7 +744,8 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(sensor._emit_pending_web_notification(1.),
                          self.reactor.NEVER)
         self.assertEqual(self.printer.gcode.raw_responses, [
-            "!! TCA9548A AHT chamber: START_NACK; retry 30s",
+            "!! TCA9548A AHT chamber: initialization failed: START_NACK; "
+            "retry in 30s",
         ])
         self.assertEqual(sensor._last_web_error_key, (
             "initialization", "START_NACK", "I2CStatusError",

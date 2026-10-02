@@ -369,10 +369,13 @@ sample does not stop its timer. The driver records the failure, retains the
 last valid temperature and humidity, marks the reading invalid, and retries a
 full AHT initialization after the shared `environment_report_time`. A
 successful retry marks the reading valid again. Repeated identical errors are
-rate-limited in `klippy.log`. The Fluidd/Mainsail Console shows short failure
-notifications such as `TCA9548A AHT lane5: START_NACK; retry 30s` as Klipper
-error lines, so they use the frontend's error color. Detailed MCU, address,
-operation, and exception information remains in `klippy.log`.
+rate-limited in `klippy.log`. The Fluidd/Mainsail Console shows failure stage,
+I2C status, and retry interval, for example
+`TCA9548A AHT lane5: measurement failed: START_NACK; retry in 30s`, as Klipper
+error lines, so they use the frontend's error color. A later retry may report
+`initialization failed` after a measurement failure; it is reinitializing the
+sensor before trying another sample. Detailed MCU, address, operation, and
+exception information remains in `klippy.log`.
 
 After an AHT failure has been shown in the Console, its first successful retry
 emits `TCA9548A AHT lane5: recovered` as a normal Console line. This state is

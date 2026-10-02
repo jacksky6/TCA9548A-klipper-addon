@@ -213,9 +213,9 @@ class AHTBase:
         self._record_web_failure(key, stage, details)
 
     def _record_web_failure(self, key, stage, details):
-        error_name = details.get("i2c_bus_status", "%s failed" % (stage,))
-        message = "TCA9548A AHT %s: %s; retry %ds" % (
-            self.name, error_name, self.report_time)
+        error_name = details.get("i2c_bus_status", details["message"])
+        message = "TCA9548A AHT %s: %s failed: %s; retry in %ds" % (
+            self.name, stage, error_name, self.report_time)
         if key != self._last_web_error_key:
             self._suppressed_web_errors = 0
             if not self._klippy_ready:
@@ -231,8 +231,10 @@ class AHTBase:
             self._suppressed_web_errors += 1
             if self._suppressed_web_errors >= WEB_FAILURE_NOTICE_INTERVAL:
                 self._respond_error(
-                    "TCA9548A AHT %s: still failing (%d attempts)" % (
-                        self.name, self._suppressed_web_errors))
+                    "TCA9548A AHT %s: %s still failing: %s "
+                    "(%d attempts)" % (
+                        self.name, stage, error_name,
+                        self._suppressed_web_errors))
                 self._suppressed_web_errors = 0
 
     def _emit_pending_web_notification(self, eventtime):
