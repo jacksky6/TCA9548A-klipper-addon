@@ -405,14 +405,17 @@ class TCA9548A:
             return False
         now = self.reactor.monotonic()
         mcu = self.reset_pin.get_mcu()
-        print_time = mcu.estimated_print_time(now)
+        # queue_digital_out needs enough lead time to reach the MCU. This is
+        # especially important for a manual reset on an idle CAN MCU.
+        schedule_delay = mcu.min_schedule_time()
+        print_time = mcu.estimated_print_time(now + schedule_delay)
         reset_release_value = not self.reset_active_high
         logging.info("TCA9548A '%s': pulsing hardware reset", self.name)
         self.last_control = self.last_channel = None
         self.reset_pin.set_digital(print_time, self.reset_active_high)
         self.reset_pin.set_digital(print_time + self.reset_pulse_time,
                                    reset_release_value)
-        self.reactor.pause(now + self.reset_pulse_time +
+        self.reactor.pause(now + schedule_delay + self.reset_pulse_time +
                            self.reset_settle_time)
         self.reset_count += 1
         return self._verify_reset_locked()

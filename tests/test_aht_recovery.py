@@ -58,6 +58,9 @@ class FakeMCU:
     def estimated_print_time(self, eventtime):
         return eventtime
 
+    def min_schedule_time(self):
+        return .100
+
 
 class FakeTransferCommand:
     def __init__(self, responses):
@@ -486,9 +489,9 @@ class TcaResetTests(unittest.TestCase):
         self.assertTrue(mux.reset())
 
         self.assertEqual(self.reset_pin.digital_values, [
-            (0., False), (.010, True),
+            (.100, False), (.110, True),
         ])
-        self.assertEqual(self.reactor.now, .020)
+        self.assertEqual(self.reactor.now, .120)
         self.assertEqual(mux.reset_count, 1)
         self.assertEqual(mux.last_reset_result, "verified")
         self.assertEqual(mux.last_control, 0)
@@ -500,7 +503,7 @@ class TcaResetTests(unittest.TestCase):
         self.assertTrue(mux.reset())
 
         self.assertEqual(self.reset_pin.digital_values, [
-            (0., True), (.010, False),
+            (.100, True), (.110, False),
         ])
         self.assertEqual(mux.last_reset_result, "verified")
 
@@ -568,7 +571,7 @@ class TcaResetTests(unittest.TestCase):
         self.assertTrue(mux._write_control_locked(0x04))
 
         self.assertEqual(self.reset_pin.digital_values, [
-            (0., False), (.010, True),
+            (.100, False), (.110, True),
         ])
         self.assertEqual(mux.auto_reset_count, 1)
         self.assertEqual(mux.reset_count, 1)
