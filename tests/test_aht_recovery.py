@@ -461,16 +461,23 @@ class TcaResetTests(unittest.TestCase):
         mux.name = "mux0"
         mux.reactor = self.reactor
         mux.mutex = FakeMutex()
+        mux.select_delay = 0.
+        mux.verify_select = False
         mux.i2c = FakeModernI2C(responses or [success(), success([0])])
         mux.reset_pin = self.reset_pin
         mux.reset_active_high = active_high
         mux.reset_pulse_time = .010
         mux.reset_settle_time = .010
+        mux.reset_recovery_cooldown = 30.
         mux.reset_count = 0
+        mux.auto_reset_count = 0
         mux.last_reset_time = None
         mux.last_reset_result = None
+        mux.last_auto_reset_time = None
         mux.last_control = 0x10
         mux.last_channel = 4
+        mux._reported_i2c_failures = set()
+        mux.gcode = FakeTcaGCode()
         return mux
 
     def test_direct_reset_pin_pulses_low_then_returns_high(self):
@@ -549,6 +556,77 @@ class TcaResetTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "reset_active_high"):
             self.core.TCA9548A(config)
+
+    def test_tca_start_nack_automatically_resets_and_retries_once(self):
+        mux = self._make_mux(responses=[
+            {"i2c_bus_status": "START_NACK", "response": []},
+            success(),
+            success([0]),
+            success(),
+        ])
+
+        self.assertTrue(mux._write_control_locked(0x04))
+
+        self.assertEqual(self.reset_pin.digital_values, [
+            (0., False), (.010, True),
+        ])
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.last_control, 0x04)
+        self.assertEqual(mux.gcode.raw_responses, [
+            "!! TCA9548A mux0: START_NACK; hardware reset",
+        ])
+        self.assertEqual(mux.gcode.responses, [
+            "TCA9548A mux0: reset verified; retrying",
+        ])
+
+    def test_tca_control_read_error_resets_and_retries_once(self):
+        mux = self._make_mux(responses=[
+            {"i2c_bus_status": "NACK", "response": []},
+            success(),
+            success([0]),
+            success([0]),
+        ])
+
+        self.assertEqual(mux._read_control_locked(), 0)
+
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.gcode.raw_responses, [
+            "!! TCA9548A mux0: NACK; hardware reset",
+        ])
+
+    def test_select_verification_error_reselects_after_hardware_reset(self):
+        mux = self._make_mux(responses=[
+            success(),
+            {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+            success(),
+            success([0]),
+            success([0]),
+            success(),
+            success([4]),
+        ])
+        mux.verify_select = True
+
+        self.assertTrue(mux._write_control_locked(0x04))
+
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.last_control, 0x04)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 7)
+
+    def test_tca_reset_cooldown_prevents_repeated_hardware_pulses(self):
+        mux = self._make_mux()
+        mux.last_auto_reset_time = 0.
+        self.reactor.now = 1.
+        error = self.core.I2CStatusError(mux.i2c, "BUS_TIMEOUT",
+                                         "TCA9548A control write", 1, 0)
+
+        self.assertFalse(mux._attempt_auto_reset_locked(error))
+
+        self.assertEqual(self.reset_pin.digital_values, [])
+        self.assertEqual(mux.auto_reset_count, 0)
+        self.assertEqual(mux.gcode.raw_responses, [])
 
 
 class AHTRecoveryTests(unittest.TestCase):

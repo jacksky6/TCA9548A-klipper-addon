@@ -39,6 +39,7 @@ from . import bme280, bus, sht3x
 TCA9548A_I2C_ADDR = 0x70
 DEFAULT_RESET_PULSE_TIME = .010
 DEFAULT_RESET_SETTLE_TIME = .010
+DEFAULT_RESET_RECOVERY_COOLDOWN = 30.
 INHERITED_I2C_OPTIONS = set([
     "i2c_mcu", "i2c_bus", "i2c_speed",
     "i2c_software_scl_pin", "i2c_software_sda_pin",
@@ -183,13 +184,16 @@ class TCA9548A:
         self.reset_active_high = False
         self.reset_pulse_time = DEFAULT_RESET_PULSE_TIME
         self.reset_settle_time = DEFAULT_RESET_SETTLE_TIME
+        self.reset_recovery_cooldown = DEFAULT_RESET_RECOVERY_COOLDOWN
         self.reset_count = 0
+        self.auto_reset_count = 0
         self.last_reset_time = None
         self.last_reset_result = None
+        self.last_auto_reset_time = None
         reset_pin_desc = config.get("reset_pin", None)
         if reset_pin_desc is None:
             for option in ("reset_active_high", "reset_pulse_time",
-                           "reset_settle_time"):
+                           "reset_settle_time", "reset_recovery_cooldown"):
                 if _has_option(config, option):
                     raise config.error(
                         "%s requires reset_pin" % (option,))
@@ -204,6 +208,9 @@ class TCA9548A:
                 "reset_pulse_time", DEFAULT_RESET_PULSE_TIME, above=0.)
             self.reset_settle_time = config.getfloat(
                 "reset_settle_time", DEFAULT_RESET_SETTLE_TIME, minval=0.)
+            self.reset_recovery_cooldown = config.getfloat(
+                "reset_recovery_cooldown", DEFAULT_RESET_RECOVERY_COOLDOWN,
+                minval=0.)
             ppins = self.printer.lookup_object("pins")
             self.reset_pin = ppins.setup_pin("digital_out", reset_pin_desc)
             self.reset_pin.setup_max_duration(0.)
@@ -283,7 +290,7 @@ class TCA9548A:
         offset = self.environment_schedule.get(sensor, 0.)
         return self.reactor.monotonic() + offset
 
-    def _write_control_locked(self, value):
+    def _write_control_locked(self, value, allow_auto_reset=True):
         if self.last_control == value:
             return True
         # Wait for the mux write to complete before a downstream device can
@@ -293,13 +300,20 @@ class TCA9548A:
                 self.i2c, [value], operation="TCA9548A control write")
         except I2CStatusError as exc:
             self.last_control = self.last_channel = None
+            if allow_auto_reset and self._attempt_auto_reset_locked(exc):
+                return self._write_control_locked(value, allow_auto_reset=False)
             self._report_i2c_failure(exc)
             return False
         self._reported_i2c_failures.clear()
         if self.select_delay:
             self.reactor.pause(self.reactor.monotonic() + self.select_delay)
         if self.verify_select:
-            if self._read_control_locked() != value:
+            control, reset_performed = self._read_control_result_locked()
+            if reset_performed:
+                # The hardware reset intentionally cleared this selection.
+                # Repeat the original control write once, without recursion.
+                return self._write_control_locked(value, allow_auto_reset=False)
+            if control != value:
                 return False
         self.last_control = value
         if value == 0:
@@ -313,6 +327,43 @@ class TCA9548A:
     def _set_reset_result(self, result):
         self.last_reset_time = self.reactor.monotonic()
         self.last_reset_result = result
+
+    def _respond_error(self, message):
+        respond_raw = getattr(self.gcode, "respond_raw", None)
+        if respond_raw is not None:
+            respond_raw("!! " + message)
+        else:
+            self.gcode.respond_info(message)
+
+    def _attempt_auto_reset_locked(self, error):
+        if self.reset_pin is None or not i2c_status_supported(self.i2c):
+            return False
+        now = self.reactor.monotonic()
+        if (self.last_auto_reset_time is not None
+                and now < self.last_auto_reset_time
+                + self.reset_recovery_cooldown):
+            logging.warning("TCA9548A '%s': %s recovery is cooling down for "
+                            "%.1fs", self.name, error.status,
+                            self.last_auto_reset_time
+                            + self.reset_recovery_cooldown - now)
+            return False
+        self.last_auto_reset_time = now
+        self.auto_reset_count += 1
+        message = "TCA9548A %s: %s; hardware reset" % (
+            self.name, error.status)
+        logging.warning(message)
+        self._respond_error(message)
+        if self._reset_locked():
+            logging.info("TCA9548A '%s': hardware reset verified; retrying "
+                         "I2C control operation", self.name)
+            self.gcode.respond_info("TCA9548A %s: reset verified; retrying" % (
+                self.name,))
+            return True
+        message = "TCA9548A %s: reset failed (%s)" % (
+            self.name, self.last_reset_result)
+        logging.error(message)
+        self._respond_error(message)
+        return False
 
     def _verify_reset_locked(self):
         if not i2c_status_supported(self.i2c):
@@ -411,21 +462,29 @@ class TCA9548A:
         self.gcode.respond_info(message)
         return False
 
-    def _read_control_locked(self):
+    def _read_control_result_locked(self, allow_auto_reset=True):
         try:
             params = i2c_transfer_recoverable(
                 self.i2c, [], 1, operation="TCA9548A control read")
         except I2CStatusError as exc:
             self.last_control = self.last_channel = None
+            if allow_auto_reset and self._attempt_auto_reset_locked(exc):
+                value, ignored = self._read_control_result_locked(
+                    allow_auto_reset=False)
+                return value, True
             self._report_i2c_failure(exc)
-            return None
+            return None, False
         self._reported_i2c_failures.clear()
         if params is None:
-            return None
+            return None, False
         response = params.get("response")
         if not response:
-            return None
-        return response[0]
+            return None, False
+        return response[0], False
+
+    def _read_control_locked(self, allow_auto_reset=True):
+        value, ignored = self._read_control_result_locked(allow_auto_reset)
+        return value
 
     def _read_control(self):
         with self.mutex:
@@ -508,9 +567,14 @@ class TCA9548A:
             "environment_sensor_count": len(self.environment_sensors),
             "reset_configured": self.reset_pin is not None,
             "reset_active_high": self.reset_active_high,
+            "reset_pulse_time": self.reset_pulse_time,
+            "reset_settle_time": self.reset_settle_time,
+            "reset_recovery_cooldown": self.reset_recovery_cooldown,
             "reset_count": self.reset_count,
+            "auto_reset_count": self.auto_reset_count,
             "last_reset_time": self.last_reset_time,
             "last_reset_result": self.last_reset_result,
+            "last_auto_reset_time": self.last_auto_reset_time,
         }
 
     cmd_TCA_SELECT_help = "Select or disable a TCA9548A mux channel"
