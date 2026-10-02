@@ -143,7 +143,7 @@ class FakeReactor:
 class FakeMux:
     def __init__(self):
         self.name = "mux0"
-        self.environment_report_time = 30
+        self.environment_report_time = 60
         self._in_session = False
         self.environment_sensors = []
         self.session_close_on_exit = []
@@ -543,6 +543,7 @@ class TcaResetTests(unittest.TestCase):
         mux = self.core.TCA9548A(config)
 
         self.assertIs(mux.reset_pin, self.reset_pin)
+        self.assertEqual(mux.environment_report_time, 60)
         self.assertTrue(mux.reset_active_high)
         self.assertEqual(pins.requests, [("digital_out", "EMU_1:PC12")])
         self.assertEqual(self.reset_pin.max_duration, 0.)
@@ -661,7 +662,7 @@ class AHTRecoveryTests(unittest.TestCase):
 
         self.reactor.now = 100.
         retry_at = sensor._sample_aht(100.)
-        self.assertEqual(retry_at, 130.)
+        self.assertEqual(retry_at, 160.)
         self.assertFalse(sensor.valid)
         self.assertFalse(sensor.communication_ok)
         self.assertFalse(sensor.init_sent)
@@ -704,7 +705,7 @@ class AHTRecoveryTests(unittest.TestCase):
         sensor._record_failure("measurement", error)
         self.assertEqual(self.printer.gcode.raw_responses, [
             "!! TCA9548A AHT chamber: measurement failed: START_NACK; "
-            "retry in 30s",
+            "retry in 60s",
         ])
         self.assertEqual(self.printer.gcode.responses, [])
 
@@ -745,7 +746,7 @@ class AHTRecoveryTests(unittest.TestCase):
                          self.reactor.NEVER)
         self.assertEqual(self.printer.gcode.raw_responses, [
             "!! TCA9548A AHT chamber: initialization failed: START_NACK; "
-            "retry in 30s",
+            "retry in 60s",
         ])
         self.assertEqual(sensor._last_web_error_key, (
             "initialization", "START_NACK", "I2CStatusError",
@@ -784,7 +785,7 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(warning.call_args_list[-1][0], (
             "%s %s: communication failure persists; "
             "%d repeated failure(s) over %ds",
-            sensor.model, sensor.name, 10, 300))
+            sensor.model, sensor.name, 10, 600))
         self.assertEqual(sensor._suppressed_log_errors, 0)
 
 

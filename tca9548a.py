@@ -10,7 +10,7 @@ Typical temperature-sensor configuration::
     i2c_mcu: EMU_1
     i2c_bus: i2c1_PB6_PB7
     i2c_address: 112              # 0x70
-    environment_report_time: 30
+    environment_report_time: 60
     # Optional hardware reset control:
     # reset_pin: EMU_1:PC12
     # reset_active_high: True      # True for an N-MOS pull-down circuit
@@ -183,7 +183,7 @@ class TCA9548A:
                                             TCA9548A_I2C_ADDR,
                                             minval=0, maxval=127)
         self.environment_report_time = config.getint(
-            "environment_report_time", 30, minval=5)
+            "environment_report_time", 60, minval=5)
         self.reset_pin = None
         self.reset_active_high = True
         self.reset_pulse_time = DEFAULT_RESET_PULSE_TIME

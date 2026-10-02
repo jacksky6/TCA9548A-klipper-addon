@@ -72,7 +72,7 @@ comment marker from both reset lines to enable the hardware reset:
 i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
-environment_report_time: 30
+environment_report_time: 60
 
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -272,7 +272,7 @@ settings, channel numbers, I2C addresses, and temperature limits accordingly.
 i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
-environment_report_time: 30
+environment_report_time: 60
 # Optional TCA RST control. See "Optional Hardware Reset" above.
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -346,7 +346,7 @@ behind the mux. Any of those options in a downstream sensor section are
 ignored. The example uses `EMU_1` and `i2c1_PB6_PB7`.
 
 `environment_report_time` sets the polling interval, in seconds, for
-environment sensors on that mux. It defaults to `30`. TCA9548A AHT sensor
+environment sensors on that mux. It defaults to `60`. TCA9548A AHT sensor
 sections intentionally do not support `aht10_report_time`; set the shared
 polling interval on the mux so all lanes can be scheduled together.
 `BME280_TCA9548A` follows the same rule and does not support per-sensor
@@ -371,7 +371,7 @@ full AHT initialization after the shared `environment_report_time`. A
 successful retry marks the reading valid again. Repeated identical errors are
 rate-limited in `klippy.log`. The Fluidd/Mainsail Console shows failure stage,
 I2C status, and retry interval, for example
-`TCA9548A AHT lane5: measurement failed: START_NACK; retry in 30s`, as Klipper
+`TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`, as Klipper
 error lines, so they use the frontend's error color. A later retry may report
 `initialization failed` after a measurement failure; it is reinitializing the
 sensor before trying another sample. Detailed MCU, address, operation, and

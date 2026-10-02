@@ -60,7 +60,7 @@ GPIO 直接接到 5V 的 `RESET#` 无法将其释放到 5V，不建议这样连�
 i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
-environment_report_time: 30
+environment_report_time: 60
 
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -227,7 +227,7 @@ SHT3X_TCA9548A
 i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70，A0/A1/A2 均为低；0x71-0x77 使用 113-119
-environment_report_time: 30
+environment_report_time: 60
 # 可选 TCA RST 控制，见“可选硬件复位”。
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -298,7 +298,7 @@ max_temp: 80
 引脚设置的唯一来源；下游传感器段中同名的设置会被忽略。示例使用
 `EMU_1` 与 `i2c1_PB6_PB7`。
 
-`environment_report_time` 是该复用器下环境传感器的轮询间隔，单位秒，默认为 `30`。
+`environment_report_time` 是该复用器下环境传感器的轮询间隔，单位秒，默认为 `60`。
 TCA9548A AHT 传感器段刻意不支持 `aht10_report_time`；请在复用器段设置共享轮询间隔，
 以便一起调度所有通道。`BME280_TCA9548A` 不支持单传感器 `bme280_report_time`，
 `SHT3X_TCA9548A` 也使用复用器间隔，不支持单传感器 `sht3x_report_time`。
@@ -316,7 +316,7 @@ Klipper 启动时，每个复用器会记录环境传感器调度计划。同一
 失败、保留最后一次有效的温湿度值、将读数标为无效，并在共享的
 `environment_report_time` 后重试完整 AHT 初始化。重试成功后读数会重新有效。相同错误
 在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C 状态和重试
-间隔，例如 `TCA9548A AHT lane5: measurement failed: START_NACK; retry in 30s`，
+间隔，例如 `TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`，
 并将其作为 Klipper 错误行显示，因而使用前端的错误颜色。测量失败后的后续重试若显示
 `initialization failed`，表示驱动正在再次采样前重新初始化传感器。详细的 MCU、地址、
 操作和异常信息仍保留在 `klippy.log`。
