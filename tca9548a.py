@@ -40,7 +40,7 @@ driver with MuxedI2C and holds a mux session for each complete PN532 operation.
 from contextlib import contextmanager
 import logging
 import greenlet
-from . import bme280, bus, sht3x
+from . import bus, sht3x
 
 TCA9548A_I2C_ADDR = 0x70
 DEFAULT_RESET_PULSE_TIME = .010
@@ -775,70 +775,6 @@ class TemperatureSensorStatusMixin:
                      self.__class__.__name__, self.name, tsensor_name)
 
 
-class BME280TCA9548A(TemperatureSensorStatusMixin, bme280.BME280):
-    def __init__(self, config):
-        if _has_option(config, "bme280_report_time"):
-            raise config.error(
-                "%s: bme280_report_time is not supported on TCA9548A BME280 "
-                "sensors; set environment_report_time in the [tca9548a] "
-                "mux section" % (config.get_name(),))
-        self._mux = None
-        self._mux_channel = config.getint("tca9548a_channel", minval=0,
-                                          maxval=7)
-        self._status_patched = False
-        mux_name = config.get("tca9548a")
-        mux_section = "tca9548a %s" % (mux_name,)
-        if not config.has_section(mux_section):
-            raise config.error("Section '%s' must be defined" % (
-                mux_section,))
-        mux = config.get_printer().load_object(config, mux_section)
-        mux_config = config.getsection(mux_section)
-        super(BME280TCA9548A, self).__init__(
-            MuxedSensorConfig(config, mux_config))
-        self._mux = mux
-        self._report_time = mux.environment_report_time
-        self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
-        mux.register_environment_sensor(self, self._mux_channel)
-        logging.info("bme280_tca9548a %s: using TCA9548A '%s' channel %d",
-                     self.name, mux_name, self._mux_channel)
-
-    def handle_connect(self):
-        self._patch_temperature_sensor_status()
-        # Initialization and the first read must stay on one channel.  The
-        # base sampler is called directly below because the override uses the
-        # mutex state to decide whether to skip a scheduled sample.
-        with self._mux.session():
-            self._init_bmxx80()
-            if self.chip_type != 'BME280':
-                self.printer.invoke_shutdown(
-                    "BME280_TCA9548A %s detected unsupported chip type %s" % (
-                        self.name, self.chip_type))
-                return
-            # Call the base sampler directly: the override below would see the
-            # mutex we are holding and skip this first reading.
-            super(BME280TCA9548A, self)._sample_bme280(
-                self.reactor.monotonic())
-        waketime = self._mux.get_environment_waketime(self)
-        self.reactor.update_timer(self.sample_timer, waketime)
-
-    def get_report_time_delta(self):
-        return self._report_time
-
-    def _sample_bme280(self, eventtime):
-        if self._mux.is_busy():
-            return eventtime + self._report_time
-        with self._mux.session():
-            result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
-        if result == self.reactor.NEVER:
-            return result
-        return self.reactor.monotonic() + self._report_time
-
-    def get_status(self, eventtime):
-        status = super(BME280TCA9548A, self).get_status(eventtime)
-        status["tca9548a_channel"] = self._mux_channel
-        return status
-
-
 class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
     def __init__(self, config):
         if _has_option(config, "sht3x_report_time"):
@@ -891,10 +827,10 @@ class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
 def _register_sensor_factory(config):
     # Import lazily so tca9548a_drivers can import this module's public mux
     # helpers without a module-load cycle.
-    from .tca9548a_drivers import aht
+    from .tca9548a_drivers import aht, bme280
     pheaters = config.get_printer().load_object(config, "heaters")
     aht.register_sensor_factories(pheaters)
-    pheaters.add_sensor_factory("BME280_TCA9548A", BME280TCA9548A)
+    bme280.register_sensor_factories(pheaters)
     pheaters.add_sensor_factory("SHT3X_TCA9548A", SHT3XTCA9548A)
 
 
