@@ -46,7 +46,10 @@ TCA9548A_I2C_ADDR = 0x70
 DEFAULT_RESET_PULSE_TIME = .010
 DEFAULT_RESET_SETTLE_TIME = .010
 DEFAULT_RESET_RECOVERY_COOLDOWN = 30.
-MAX_CONSECUTIVE_AUTO_RESET_FAILURES = 5
+# Automatic mux reset stops after one failure group. Environment sensors use
+# three groups before stopping their own sampling.
+RECOVERY_FAILURE_GROUP_SIZE = 5
+MAX_CONSECUTIVE_AUTO_RESET_FAILURES = RECOVERY_FAILURE_GROUP_SIZE
 INHERITED_I2C_OPTIONS = set([
     "i2c_mcu", "i2c_bus", "i2c_speed",
     "i2c_software_scl_pin", "i2c_software_sda_pin",

@@ -951,7 +951,7 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(self.printer.gcode.responses, [])
         self.assertIsNone(sensor._pending_web_notification)
 
-    def test_log_summary_uses_failure_count_and_retry_interval(self):
+    def test_log_summary_uses_five_failure_groups(self):
         raw_i2c = FakeModernI2C([])
         self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
         sensor = self.aht.AHT2x(self.config)
@@ -959,18 +959,21 @@ class AHTRecoveryTests(unittest.TestCase):
 
         with mock.patch.object(self.aht.logging, "warning") as warning:
             sensor._record_failure("measurement", error)
-            for _ in range(9):
+            for _ in range(3):
                 sensor._record_failure("measurement", error)
             self.assertEqual(warning.call_count, 1)
 
             sensor._record_failure("measurement", error)
+            self.assertEqual(warning.call_count, 2)
 
-        self.assertEqual(warning.call_count, 2)
+            for _ in range(5):
+                sensor._record_failure("measurement", error)
+
+        self.assertEqual(warning.call_count, 3)
         self.assertEqual(warning.call_args_list[-1][0], (
             "%s %s: communication failure persists; "
-            "%d repeated failure(s) over %ds",
-            sensor.model, sensor.name, 10, 600))
-        self.assertEqual(sensor._suppressed_log_errors, 0)
+            "%d consecutive failure(s); retrying in %ds",
+            sensor.model, sensor.name, 10, 60))
 
 
 if __name__ == "__main__":

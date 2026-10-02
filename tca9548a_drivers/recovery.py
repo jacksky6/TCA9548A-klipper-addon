@@ -2,10 +2,13 @@
 
 import logging
 
+from .. import tca9548a
 
-LOG_FAILURE_NOTICE_INTERVAL = 10
+
 WEB_CONSOLE_READY_DELAY = 1.
-MAX_CONSECUTIVE_ENVIRONMENT_FAILURES = 15
+# Log ongoing failures at 5 and 10; stop the sensor after the third group.
+MAX_CONSECUTIVE_ENVIRONMENT_FAILURES = (
+    3 * tca9548a.RECOVERY_FAILURE_GROUP_SIZE)
 
 RECOVERY_STATUS_FIELDS = (
     "valid",
@@ -41,7 +44,6 @@ class EnvironmentRecoveryMixin:
         self.error_count = 0
         self.consecutive_failure_count = 0
         self._last_log_error_key = None
-        self._suppressed_log_errors = 0
         self._last_web_error_key = None
         self._klippy_ready = False
         self._pending_web_notification = None
@@ -87,17 +89,14 @@ class EnvironmentRecoveryMixin:
                             "retrying in %ds", self.model, self.name,
                             stage, details["message"], self.report_time)
             self._last_log_error_key = key
-            self._suppressed_log_errors = 0
-        else:
-            self._suppressed_log_errors += 1
-            if self._suppressed_log_errors >= LOG_FAILURE_NOTICE_INTERVAL:
-                logging.warning("%s %s: communication failure persists; "
-                                "%d repeated failure(s) over %ds",
-                                self.model, self.name,
-                                self._suppressed_log_errors,
-                                self._suppressed_log_errors *
-                                self.report_time)
-                self._suppressed_log_errors = 0
+        elif (not self._sampling_stopped()
+              and self.consecutive_failure_count %
+              tca9548a.RECOVERY_FAILURE_GROUP_SIZE == 0):
+            logging.warning("%s %s: communication failure persists; %d "
+                            "consecutive failure(s); retrying in %ds",
+                            self.model, self.name,
+                            self.consecutive_failure_count,
+                            self.report_time)
 
         self._record_web_failure(key, stage, details)
         if self._sampling_stopped():
@@ -176,7 +175,6 @@ class EnvironmentRecoveryMixin:
         self.last_success_time = self.reactor.monotonic()
         self.consecutive_failure_count = 0
         self._last_log_error_key = None
-        self._suppressed_log_errors = 0
         self._last_web_error_key = None
         self._pending_web_notification = None
 
