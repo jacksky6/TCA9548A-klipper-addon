@@ -8,10 +8,26 @@ trap 'rm -rf -- "${TEMPORARY_DIRECTORY}"' EXIT
 mkdir -p "${TEMPORARY_DIRECTORY}/bin"
 cat > "${TEMPORARY_DIRECTORY}/bin/git" <<'EOF'
 #!/usr/bin/env bash
+current_branch() {
+    if [[ -n "${MOCK_BRANCH_STATE_FILE:-}" && -f "${MOCK_BRANCH_STATE_FILE}" ]]; then
+        cat "${MOCK_BRANCH_STATE_FILE}"
+    else
+        printf '%s\n' "${MOCK_BRANCH:-dev}"
+    fi
+}
+
 case " $* " in
-    *" branch --show-current "*) echo dev ;;
+    *" branch --show-current "*) current_branch ;;
     *" rev-parse --is-inside-work-tree "*) echo true ;;
-    *" rev-parse --abbrev-ref --symbolic-full-name @{upstream} "*) echo origin/dev ;;
+    *" rev-parse --abbrev-ref --symbolic-full-name @{upstream} "*)
+        echo "origin/$(current_branch)"
+        ;;
+    *" checkout "*)
+        if [[ -n "${MOCK_BRANCH_STATE_FILE:-}" ]]; then
+            printf '%s\n' "${!#}" > "${MOCK_BRANCH_STATE_FILE}"
+        fi
+        ;;
+    *" for-each-ref "*) printf '%s\n' dev main ;;
     *" fetch "*) ;;
     *" rev-list --left-right --count HEAD...FETCH_HEAD "*)
         if [[ "${MOCK_UPDATE_AVAILABLE:-0}" == 1 ]]; then
@@ -88,6 +104,32 @@ PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     > "${TEMPORARY_DIRECTORY}/skip-update.log"
 grep -Fq 'Update check:           skipped (-s)' \
     "${TEMPORARY_DIRECTORY}/skip-update.log"
+
+printf '%s\n' dev > "${TEMPORARY_DIRECTORY}/branch-state"
+MOCK_BRANCH_STATE_FILE="${TEMPORARY_DIRECTORY}/branch-state" \
+    PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
+    bash "${REPOSITORY}/install.sh" \
+    --firmware-dir "${TEMPORARY_DIRECTORY}/modern" --branch main -s \
+    > "${TEMPORARY_DIRECTORY}/branch-switch.log"
+[[ "$(< "${TEMPORARY_DIRECTORY}/branch-state")" == main ]]
+grep -Eq '^Branch switch:[[:space:]]+dev -> main$' \
+    "${TEMPORARY_DIRECTORY}/branch-switch.log"
+grep -Eq '^Branch:[[:space:]]+main$' \
+    "${TEMPORARY_DIRECTORY}/branch-switch.log"
+
+printf '%s\n' dev > "${TEMPORARY_DIRECTORY}/branch-state"
+if command -v script >/dev/null 2>&1; then
+    printf '2\n' | MOCK_BRANCH_STATE_FILE="${TEMPORARY_DIRECTORY}/branch-state" \
+        PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
+        script -q -e -c \
+        "bash '${REPOSITORY}/install.sh' --firmware-dir '${TEMPORARY_DIRECTORY}/modern' -b -s" \
+        /dev/null > "${TEMPORARY_DIRECTORY}/branch-selector.log"
+    [[ "$(< "${TEMPORARY_DIRECTORY}/branch-state")" == main ]]
+    grep -Eq 'Select branch \[1-2\].*2' \
+        "${TEMPORARY_DIRECTORY}/branch-selector.log"
+    grep -Eq 'Branch switch:[[:space:]]+dev -> main' \
+        "${TEMPORARY_DIRECTORY}/branch-selector.log"
+fi
 create_firmware legacy 0
 if PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     bash "${REPOSITORY}/install.sh" \

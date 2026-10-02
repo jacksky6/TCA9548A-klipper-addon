@@ -66,9 +66,15 @@ driver directories automatically.
 It does not restart Klipper or Kalico; use Fluidd/Mainsail's Restart Klipper
 action after installation.
 
+Use `-b` or `--branch` without a name to list local and `origin` branches, then
+select one interactively. Use `-b BRANCH` or `--branch BRANCH` to switch
+directly; for example, `./install.sh -b dev`. If a requested branch is not
+local, the installer fetches it from `origin` with the same 10-second timeout.
 Use `-s` or `--skip-update` to skip the remote update check and install from
-the current local files. In a non-interactive run, an available update is
-reported but not installed; the installer continues with local files.
+the current local files; with `-b BRANCH`, the requested branch must already
+exist locally or in the local `origin` cache. In a non-interactive run, an
+available update is reported but not installed; the installer continues with
+local files.
 
 ### AHT I2C Recovery Check
 

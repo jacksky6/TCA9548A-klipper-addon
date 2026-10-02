@@ -10,6 +10,9 @@ TARGET_DIR=""
 UNINSTALL=0
 ALLOW_LEGACY_I2C=0
 SKIP_UPDATE=0
+REQUESTED_BRANCH=""
+SELECT_BRANCH=0
+BRANCH_SWITCH_DESCRIPTION=""
 I2C_RECOVERY_SUPPORTED=0
 I2C_RECOVERY_MIN_VERSION="v0.13.0-525-g8965958"
 UPDATE_CHECK_TIMEOUT_SECONDS=10
@@ -72,8 +75,9 @@ print_recovery_notice() {
 }
 
 usage() {
-    echo "Usage: $0 [--firmware-dir PATH] [--allow-legacy-i2c] [-s|--skip-update] [-u|--uninstall]"
+    echo "Usage: $0 [--firmware-dir PATH] [--allow-legacy-i2c] [-b|--branch BRANCH] [-s|--skip-update] [-u|--uninstall]"
     echo "Install or uninstall TCA9548A symbolic links in Klipper or Kalico extras."
+    echo "-b, --branch [BRANCH] selects or switches to a branch before installation."
     echo "-s, --skip-update skips the remote update check and uses local files."
     echo "--allow-legacy-i2c installs without an interactive confirmation when"
     echo "the target does not support recoverable I2C status responses."
@@ -100,6 +104,15 @@ while [[ $# -gt 0 ]]; do
         -s|--skip-update)
             SKIP_UPDATE=1
             shift
+            ;;
+        -b|--branch)
+            if [[ $# -gt 1 && "${2}" != -* ]]; then
+                REQUESTED_BRANCH="$2"
+                shift 2
+            else
+                SELECT_BRANCH=1
+                shift
+            fi
             ;;
         --help)
             usage
@@ -172,6 +185,155 @@ detect_i2c_recovery_support() {
             "${bus_file}"; then
         I2C_RECOVERY_SUPPORTED=1
     fi
+}
+
+validate_addon_sources() {
+    local addon_path source_path
+    for addon_path in "${ADDON_PATHS[@]}"; do
+        source_path="${SCRIPT_DIR}/${addon_path}"
+        if [[ ! -e "${source_path}" ]]; then
+            echo "Add-on source not found: ${source_path}" >&2
+            exit 1
+        fi
+    done
+}
+
+switch_repository_branch() {
+    local previous_branch="${BRANCH}"
+    local fetch_status
+
+    if ! git -C "${SCRIPT_DIR}" check-ref-format --branch \
+        "${REQUESTED_BRANCH}" >/dev/null 2>&1; then
+        echo "Invalid branch name: ${REQUESTED_BRANCH}" >&2
+        exit 2
+    fi
+    if [[ "${REQUESTED_BRANCH}" == "${BRANCH}" ]]; then
+        BRANCH_SWITCH_DESCRIPTION="${REQUESTED_BRANCH} (already selected)"
+        return
+    fi
+
+    if ! git -C "${SCRIPT_DIR}" show-ref --verify --quiet \
+        "refs/heads/${REQUESTED_BRANCH}"; then
+        if ! git -C "${SCRIPT_DIR}" show-ref --verify --quiet \
+            "refs/remotes/origin/${REQUESTED_BRANCH}"; then
+            if [[ "${SKIP_UPDATE}" -eq 1 ]]; then
+                echo "Branch '${REQUESTED_BRANCH}' is not available locally." >&2
+                echo "Re-run without -s to fetch it from origin." >&2
+                exit 1
+            fi
+            if ! git -C "${SCRIPT_DIR}" remote get-url origin >/dev/null 2>&1; then
+                echo "Branch '${REQUESTED_BRANCH}' is not available locally and no origin remote exists." >&2
+                exit 1
+            fi
+            print_field "Branch fetch" "${REQUESTED_BRANCH} (10s timeout)"
+            if ! command -v timeout >/dev/null 2>&1; then
+                echo "Cannot fetch branch: the timeout command is unavailable." >&2
+                exit 1
+            fi
+            GIT_TERMINAL_PROMPT=0 timeout --foreground \
+                "${UPDATE_CHECK_TIMEOUT_SECONDS}s" \
+                git -C "${SCRIPT_DIR}" fetch --quiet --no-tags origin \
+                "refs/heads/${REQUESTED_BRANCH}:refs/remotes/origin/${REQUESTED_BRANCH}"
+            fetch_status=$?
+            if [[ "${fetch_status}" -ne 0 ]]; then
+                if [[ "${fetch_status}" -eq 124 ]]; then
+                    echo "Branch fetch timed out after ${UPDATE_CHECK_TIMEOUT_SECONDS}s." >&2
+                else
+                    echo "Unable to fetch branch '${REQUESTED_BRANCH}' from origin." >&2
+                fi
+                exit 1
+            fi
+            if ! git -C "${SCRIPT_DIR}" show-ref --verify --quiet \
+                "refs/remotes/origin/${REQUESTED_BRANCH}"; then
+                echo "Branch '${REQUESTED_BRANCH}' was not found on origin." >&2
+                exit 1
+            fi
+        fi
+        if ! git -C "${SCRIPT_DIR}" checkout -b "${REQUESTED_BRANCH}" \
+            --track "origin/${REQUESTED_BRANCH}" >/dev/null 2>&1; then
+            echo "Unable to create local branch '${REQUESTED_BRANCH}'." >&2
+            exit 1
+        fi
+    elif ! git -C "${SCRIPT_DIR}" checkout "${REQUESTED_BRANCH}" \
+        >/dev/null 2>&1; then
+        echo "Unable to switch to branch '${REQUESTED_BRANCH}'." >&2
+        echo "Commit, stash, or remove conflicting local changes first." >&2
+        exit 1
+    fi
+
+    BRANCH="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
+    if [[ -z "${BRANCH}" ]]; then
+        echo "Branch switch did not result in an active branch." >&2
+        exit 1
+    fi
+    BRANCH_SWITCH_DESCRIPTION="${previous_branch} -> ${BRANCH}"
+}
+
+select_repository_branch() {
+    local branch_list_output fetch_status selection index
+    local -a branches
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        echo "Branch selection requires an interactive terminal." >&2
+        echo "Use -b BRANCH to select a branch non-interactively." >&2
+        exit 1
+    fi
+
+    print_section "Branch Selection"
+    if [[ "${SKIP_UPDATE}" -eq 0 ]] \
+        && git -C "${SCRIPT_DIR}" remote get-url origin >/dev/null 2>&1; then
+        print_field "Branch list" "origin (10s timeout)"
+        if command -v timeout >/dev/null 2>&1; then
+            GIT_TERMINAL_PROMPT=0 timeout --foreground \
+                "${UPDATE_CHECK_TIMEOUT_SECONDS}s" \
+                git -C "${SCRIPT_DIR}" fetch --quiet --no-tags origin \
+                '+refs/heads/*:refs/remotes/origin/*'
+            fetch_status=$?
+            if [[ "${fetch_status}" -eq 124 ]]; then
+                print_status "${COLOR_WARN}" "Branch list" "timed out; using local cache"
+            elif [[ "${fetch_status}" -ne 0 ]]; then
+                print_status "${COLOR_WARN}" "Branch list" "failed; using local cache"
+            fi
+        else
+            print_status "${COLOR_WARN}" "Branch list" "unavailable; using local cache"
+        fi
+    elif [[ "${SKIP_UPDATE}" -eq 1 ]]; then
+        print_field "Branch list" "local cache (-s)"
+    else
+        print_field "Branch list" "local branches (no origin remote)"
+    fi
+
+    branch_list_output="$(git -C "${SCRIPT_DIR}" for-each-ref \
+        --format='%(refname:short)' refs/heads refs/remotes/origin \
+        | sed -e 's|^origin/||' -e '/^HEAD$/d' | sort -u)"
+    mapfile -t branches <<< "${branch_list_output}"
+    if [[ "${#branches[@]}" -eq 0 || -z "${branches[0]}" ]]; then
+        echo "No local or origin branches are available." >&2
+        exit 1
+    fi
+
+    echo ""
+    for index in "${!branches[@]}"; do
+        if [[ "${branches[${index}]}" == "${BRANCH}" ]]; then
+            printf '  %d) %s (current)\n' "$((index + 1))" "${branches[${index}]}"
+        else
+            printf '  %d) %s\n' "$((index + 1))" "${branches[${index}]}"
+        fi
+    done
+    echo ""
+    if ! read -r -p "Select branch [1-${#branches[@]}] (Enter to keep ${BRANCH}): " selection; then
+        selection=""
+    fi
+    if [[ -z "${selection}" ]]; then
+        print_field "Branch switch" "kept ${BRANCH}"
+        return
+    fi
+    if [[ ! "${selection}" =~ ^[0-9]+$ \
+        || "${selection}" -lt 1 || "${selection}" -gt "${#branches[@]}" ]]; then
+        echo "Invalid branch selection." >&2
+        exit 2
+    fi
+    REQUESTED_BRANCH="${branches[$((selection - 1))]}"
 }
 
 check_repository_update() {
@@ -295,14 +457,6 @@ confirm_i2c_recovery_support() {
 }
 
 if [[ "${UNINSTALL}" -eq 0 ]]; then
-    for addon_path in "${ADDON_PATHS[@]}"; do
-        source_path="${SCRIPT_DIR}/${addon_path}"
-        if [[ ! -e "${source_path}" ]]; then
-            echo "Add-on source not found: ${source_path}" >&2
-            exit 1
-        fi
-    done
-
     BRANCH="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
     if [[ -z "${BRANCH}" ]]; then
         BRANCH="detached at $(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -310,6 +464,21 @@ if [[ "${UNINSTALL}" -eq 0 ]]; then
     print_banner
     print_recovery_notice
     print_section "Add-on Repository"
+    if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+        && [[ "${SELECT_BRANCH}" -eq 1 ]]; then
+        select_repository_branch
+    elif [[ "${SELECT_BRANCH}" -eq 1 ]]; then
+        echo "Cannot select branches: add-on directory is not a Git checkout." >&2
+        exit 1
+    fi
+    if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+        && [[ -n "${REQUESTED_BRANCH}" ]]; then
+        switch_repository_branch
+        print_status "${COLOR_OK}" "Branch switch" "${BRANCH_SWITCH_DESCRIPTION}"
+    elif [[ -n "${REQUESTED_BRANCH}" ]]; then
+        echo "Cannot switch branches: add-on directory is not a Git checkout." >&2
+        exit 1
+    fi
     print_field "Branch" "${BRANCH}"
 
     if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -317,6 +486,7 @@ if [[ "${UNINSTALL}" -eq 0 ]]; then
     else
         print_field "Update check" "skipped (not a Git checkout)"
     fi
+    validate_addon_sources
 fi
 
 detect_firmware
