@@ -14,7 +14,7 @@ CMD_INIT_AHT2X = [0xBE, 0x08, 0x00]
 STATUS_BUSY = 0x80
 STATUS_CALIBRATED = 0x08
 MAX_BUSY_CYCLES = 5
-ERROR_LOG_INTERVAL = 300.
+LOG_FAILURE_NOTICE_INTERVAL = 10
 WEB_FAILURE_NOTICE_INTERVAL = 120
 
 
@@ -66,7 +66,6 @@ class AHTBase:
         self.i2c_error_count = 0
         self.error_count = 0
         self._last_log_error_key = None
-        self._last_log_error_time = 0.
         self._suppressed_log_errors = 0
         self._last_web_error_key = None
         self._suppressed_web_errors = 0
@@ -186,16 +185,16 @@ class AHTBase:
                             "retrying in %ds", self.model, self.name,
                             stage, details["message"], self.report_time)
             self._last_log_error_key = key
-            self._last_log_error_time = now
             self._suppressed_log_errors = 0
         else:
             self._suppressed_log_errors += 1
-            if now - self._last_log_error_time >= ERROR_LOG_INTERVAL:
+            if self._suppressed_log_errors >= LOG_FAILURE_NOTICE_INTERVAL:
                 logging.warning("%s %s: communication failure persists; "
-                                "suppressed %d repeated failure(s)",
+                                "%d repeated failure(s) over %ds",
                                 self.model, self.name,
-                                self._suppressed_log_errors)
-                self._last_log_error_time = now
+                                self._suppressed_log_errors,
+                                self._suppressed_log_errors *
+                                self.report_time)
                 self._suppressed_log_errors = 0
 
         if key != self._last_web_error_key:
@@ -225,7 +224,6 @@ class AHTBase:
         self.communication_ok = True
         self.last_success_time = self.reactor.monotonic()
         self._last_log_error_key = None
-        self._last_log_error_time = 0.
         self._suppressed_log_errors = 0
         self._last_web_error_key = None
         self._suppressed_web_errors = 0

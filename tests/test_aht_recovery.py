@@ -4,6 +4,7 @@ import pathlib
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 REPOSITORY = pathlib.Path(__file__).resolve().parents[1]
@@ -351,6 +352,27 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.printer.gcode.responses), 3)
         self.assertIsNone(sensor._last_web_error_key)
         self.assertEqual(sensor._suppressed_web_errors, 0)
+
+    def test_log_summary_uses_failure_count_and_retry_interval(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        error = self.aht.AHTMeasurementError("test failure")
+
+        with mock.patch.object(self.aht.logging, "warning") as warning:
+            sensor._record_failure("measurement", error)
+            for _ in range(9):
+                sensor._record_failure("measurement", error)
+            self.assertEqual(warning.call_count, 1)
+
+            sensor._record_failure("measurement", error)
+
+        self.assertEqual(warning.call_count, 2)
+        self.assertEqual(warning.call_args_list[-1][0], (
+            "%s %s: communication failure persists; "
+            "%d repeated failure(s) over %ds",
+            sensor.model, sensor.name, 10, 300))
+        self.assertEqual(sensor._suppressed_log_errors, 0)
 
 
 if __name__ == "__main__":
