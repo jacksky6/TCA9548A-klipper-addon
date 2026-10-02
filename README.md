@@ -1,5 +1,7 @@
 # TCA9548A Klipper Add-on
 
+[English](README.md) | [简体中文](README_CN.md)
+
 Klipper add-on providing TCA9548A I2C multiplexer support. It manages channel
 selection and serialized access to devices behind the mux, and provides Klipper
 temperature-sensor adapters for AHT1x, AHT2x, AHT3x, BME280, and SHT3X sensors.
