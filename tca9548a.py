@@ -40,7 +40,7 @@ driver with MuxedI2C and holds a mux session for each complete PN532 operation.
 from contextlib import contextmanager
 import logging
 import greenlet
-from . import bus, sht3x
+from . import bus
 
 TCA9548A_I2C_ADDR = 0x70
 DEFAULT_RESET_PULSE_TIME = .010
@@ -747,91 +747,14 @@ class RecoverableMuxedI2C(MuxedI2C):
         return self._transfer(write, read_len, minclock, reqclock, retry)
 
 
-class TemperatureSensorStatusMixin:
-    def _patch_temperature_sensor_status(self):
-        if getattr(self, "_status_patched", False):
-            return
-        tsensor_name = "temperature_sensor %s" % (self.name,)
-        tsensor = self.printer.lookup_object(tsensor_name, None)
-        if tsensor is None:
-            return
-        # Preserve the wrapper's native status and augment it with values that
-        # are only available from the muxed sensor implementation.
-        original_get_status = tsensor.get_status
-        sensor = self
-
-        def get_status_with_environment(eventtime):
-            status = original_get_status(eventtime)
-            sensor_status = sensor.get_status(eventtime)
-            for key in ("humidity",):
-                if key in sensor_status:
-                    status[key] = sensor_status[key]
-            status["tca9548a_channel"] = sensor._mux_channel
-            return status
-
-        tsensor.get_status = get_status_with_environment
-        self._status_patched = True
-        logging.info("%s %s: exposed environment data on '%s'",
-                     self.__class__.__name__, self.name, tsensor_name)
-
-
-class SHT3XTCA9548A(TemperatureSensorStatusMixin, sht3x.SHT3X):
-    def __init__(self, config):
-        if _has_option(config, "sht3x_report_time"):
-            raise config.error(
-                "%s: sht3x_report_time is not supported on TCA9548A SHT3X "
-                "sensors; set environment_report_time in the [tca9548a] "
-                "mux section" % (config.get_name(),))
-        self._mux = None
-        self._mux_channel = config.getint("tca9548a_channel", minval=0,
-                                          maxval=7)
-        self._status_patched = False
-        mux_name = config.get("tca9548a")
-        mux_section = "tca9548a %s" % (mux_name,)
-        if not config.has_section(mux_section):
-            raise config.error("Section '%s' must be defined" % (
-                mux_section,))
-        mux = config.get_printer().load_object(config, mux_section)
-        mux_config = config.getsection(mux_section)
-        super(SHT3XTCA9548A, self).__init__(
-            MuxedSensorConfig(config, mux_config))
-        self._mux = mux
-        self.report_time = mux.environment_report_time
-        self.i2c = MuxedI2C(mux, self._mux_channel, self.i2c)
-        mux.register_environment_sensor(self, self._mux_channel)
-        logging.info("sht3x_tca9548a %s: using TCA9548A '%s' channel %d",
-                     self.name, mux_name, self._mux_channel)
-
-    def handle_connect(self):
-        self._patch_temperature_sensor_status()
-        # Keep initialization and the immediate first sample on one channel;
-        # calling the base sampler avoids this class's busy-skip override.
-        with self._mux.session():
-            self._init_sht3x()
-            super(SHT3XTCA9548A, self)._sample_sht3x(self.reactor.monotonic())
-        waketime = self._mux.get_environment_waketime(self)
-        self.reactor.update_timer(self.sample_timer, waketime)
-
-    def _sample_sht3x(self, eventtime):
-        if self._mux.is_busy():
-            return eventtime + self.report_time
-        with self._mux.session():
-            return super(SHT3XTCA9548A, self)._sample_sht3x(eventtime)
-
-    def get_status(self, eventtime):
-        status = super(SHT3XTCA9548A, self).get_status(eventtime)
-        status["tca9548a_channel"] = self._mux_channel
-        return status
-
-
 def _register_sensor_factory(config):
     # Import lazily so tca9548a_drivers can import this module's public mux
     # helpers without a module-load cycle.
-    from .tca9548a_drivers import aht, bme280
+    from .tca9548a_drivers import aht, bme280, sht3x
     pheaters = config.get_printer().load_object(config, "heaters")
     aht.register_sensor_factories(pheaters)
     bme280.register_sensor_factories(pheaters)
-    pheaters.add_sensor_factory("SHT3X_TCA9548A", SHT3XTCA9548A)
+    sht3x.register_sensor_factories(pheaters)
 
 
 def load_config(config):
