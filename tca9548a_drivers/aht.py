@@ -15,6 +15,7 @@ STATUS_BUSY = 0x80
 STATUS_CALIBRATED = 0x08
 MAX_BUSY_CYCLES = 5
 ERROR_LOG_INTERVAL = 300.
+WEB_FAILURE_NOTICE_INTERVAL = 120
 
 
 class AHTMeasurementError(Exception):
@@ -67,6 +68,8 @@ class AHTBase:
         self._last_log_error_key = None
         self._last_log_error_time = 0.
         self._suppressed_log_errors = 0
+        self._last_web_error_key = None
+        self._suppressed_web_errors = 0
 
         # Preserve Klipper's standard AHT object name for consumers that look
         # up humidity independently of temperature_sensor.
@@ -195,16 +198,46 @@ class AHTBase:
                 self._last_log_error_time = now
                 self._suppressed_log_errors = 0
 
+        if key != self._last_web_error_key:
+            self._respond_info(
+                "TCA9548A AHT %s: I2C communication failed during %s: "
+                "%s; retrying in %ds" % (
+                    self.name, stage, details["message"], self.report_time))
+            self._last_web_error_key = key
+            self._suppressed_web_errors = 0
+        else:
+            self._suppressed_web_errors += 1
+            if self._suppressed_web_errors >= WEB_FAILURE_NOTICE_INTERVAL:
+                self._respond_info(
+                    "TCA9548A AHT %s: I2C communication still failing; "
+                    "%d repeated failed attempts since last notice" % (
+                        self.name, self._suppressed_web_errors))
+                self._suppressed_web_errors = 0
+
     def _record_success(self):
         if not self.communication_ok and self.last_success_time is not None:
             logging.info("%s %s: I2C communication recovered",
                          self.model, self.name)
+            self._respond_info(
+                "TCA9548A AHT %s: I2C communication recovered" % (
+                    self.name,))
         self.valid = True
         self.communication_ok = True
         self.last_success_time = self.reactor.monotonic()
         self._last_log_error_key = None
         self._last_log_error_time = 0.
         self._suppressed_log_errors = 0
+        self._last_web_error_key = None
+        self._suppressed_web_errors = 0
+
+    def _respond_info(self, message):
+        try:
+            gcode = self.printer.lookup_object("gcode", None)
+            if gcode is not None:
+                gcode.respond_info(message)
+        except Exception:
+            logging.exception("%s %s: unable to send Console notification",
+                              self.model, self.name)
 
     def _sample_aht(self, eventtime):
         if self._mux.is_busy():

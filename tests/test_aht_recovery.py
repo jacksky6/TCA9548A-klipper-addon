@@ -167,11 +167,20 @@ class FakeMux:
         return 30.
 
 
+class FakeGCode:
+    def __init__(self):
+        self.responses = []
+
+    def respond_info(self, message):
+        self.responses.append(message)
+
+
 class FakePrinter:
     def __init__(self, reactor, mux):
         self.reactor = reactor
         self.mux = mux
-        self.objects = {}
+        self.gcode = FakeGCode()
+        self.objects = {"gcode": self.gcode}
         self.events = []
         self.shutdowns = []
 
@@ -309,6 +318,39 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertTrue(sensor.init_sent)
         self.assertGreater(next_waketime, retry_at)
         self.assertEqual(self.printer.shutdowns, [])
+
+    def test_web_console_reports_failure_summary_and_recovery(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        error = self.core.I2CStatusError(raw_i2c, "START_NACK", "write",
+                                         3, 0)
+
+        sensor._record_failure("measurement", error)
+        self.assertEqual(self.printer.gcode.responses, [
+            "TCA9548A AHT chamber: I2C communication failed during "
+            "measurement: MCU 'mcu' I2C request to addr 56 reports error "
+            "START_NACK during write; retrying in 30s",
+        ])
+
+        for _ in range(119):
+            sensor._record_failure("measurement", error)
+        self.assertEqual(len(self.printer.gcode.responses), 1)
+
+        sensor._record_failure("measurement", error)
+        self.assertEqual(self.printer.gcode.responses[-1],
+                         "TCA9548A AHT chamber: I2C communication still "
+                         "failing; 120 repeated failed attempts since last "
+                         "notice")
+        self.assertEqual(len(self.printer.gcode.responses), 2)
+
+        sensor.last_success_time = 1.
+        sensor._record_success()
+        self.assertEqual(self.printer.gcode.responses[-1],
+                         "TCA9548A AHT chamber: I2C communication recovered")
+        self.assertEqual(len(self.printer.gcode.responses), 3)
+        self.assertIsNone(sensor._last_web_error_key)
+        self.assertEqual(sensor._suppressed_web_errors, 0)
 
 
 if __name__ == "__main__":
