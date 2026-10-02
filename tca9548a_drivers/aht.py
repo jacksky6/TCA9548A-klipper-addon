@@ -91,7 +91,7 @@ class AHTBase:
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)
             return
-        with self._mux.session():
+        with self._mux.session(close_on_exit=True):
             initialized = self._initialize_sensor()
         if initialized:
             self._publish_sample()
@@ -275,7 +275,7 @@ class AHTBase:
     def _sample_aht(self, eventtime):
         if self._mux.is_busy():
             return eventtime + self.report_time
-        with self._mux.session():
+        with self._mux.session(close_on_exit=True):
             if self.init_sent:
                 self.i2c.clear_error()
                 success = self._make_measurement("measurement")

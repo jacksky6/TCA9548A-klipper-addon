@@ -143,9 +143,11 @@ class FakeMux:
         self.environment_report_time = 30
         self._in_session = False
         self.environment_sensors = []
+        self.session_close_on_exit = []
 
     @contextlib.contextmanager
-    def session(self):
+    def session(self, close_on_exit=False):
+        self.session_close_on_exit.append(close_on_exit)
         self._in_session = True
         try:
             yield
@@ -273,6 +275,71 @@ class RecoverableTransportTests(unittest.TestCase):
         self.assertEqual(raw_i2c.writes, [([0xBA], 0, 0)])
 
 
+class FakeMutex:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+
+class MuxSessionTests(unittest.TestCase):
+    def setUp(self):
+        self.bus, self.core, self.aht = _load_driver_modules()
+        self.mux = object.__new__(self.core.TCA9548A)
+        self.mux.mutex = FakeMutex()
+        self.mux.last_control = 0x04
+        self.mux.last_channel = 2
+        self.mux._session_owner = None
+        self.mux._session_depth = 0
+        self.write_control = mock.Mock(return_value=True)
+        self.mux._write_control_locked = self.write_control
+
+    def test_close_on_exit_disables_after_successful_operation(self):
+        with self.mux.session(close_on_exit=True):
+            self.assertTrue(self.mux.is_session_owner())
+
+        self.assertEqual(self.write_control.call_args_list, [mock.call(0x00)])
+        self.assertEqual(self.mux.last_control, 0)
+        self.assertIsNone(self.mux.last_channel)
+        self.assertIsNone(self.mux._session_owner)
+
+    def test_close_on_exit_runs_when_operation_raises(self):
+        with self.assertRaisesRegex(RuntimeError, "sensor failure"):
+            with self.mux.session(close_on_exit=True):
+                raise RuntimeError("sensor failure")
+
+        self.assertEqual(self.write_control.call_args_list, [mock.call(0x00)])
+        self.assertEqual(self.mux.last_control, 0)
+        self.assertIsNone(self.mux.last_channel)
+
+    def test_nested_session_waits_for_outer_exit_before_disabling(self):
+        with self.mux.session(close_on_exit=True):
+            with self.mux.session(close_on_exit=True):
+                pass
+            self.assertEqual(self.write_control.call_count, 0)
+
+        self.assertEqual(self.write_control.call_args_list, [mock.call(0x00)])
+
+    def test_default_session_preserves_existing_channel_selection(self):
+        with self.mux.session():
+            pass
+
+        self.assertEqual(self.write_control.call_count, 0)
+        self.assertEqual(self.mux.last_control, 0x04)
+        self.assertEqual(self.mux.last_channel, 2)
+
+    def test_failed_close_marks_channel_state_unknown(self):
+        self.write_control.return_value = False
+
+        with self.mux.session(close_on_exit=True):
+            pass
+
+        self.assertEqual(self.write_control.call_args_list, [mock.call(0x00)])
+        self.assertIsNone(self.mux.last_control)
+        self.assertIsNone(self.mux.last_channel)
+
+
 class AHTRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.bus, self.core, self.aht = _load_driver_modules()
@@ -319,6 +386,20 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertTrue(sensor.init_sent)
         self.assertGreater(next_waketime, retry_at)
         self.assertEqual(self.printer.shutdowns, [])
+
+    def test_aht_sample_requests_channel_isolation_on_session_exit(self):
+        raw_i2c = FakeModernI2C([
+            success(),             # AHT2x initialization command
+            success(),             # initial measurement command
+            success(MEASUREMENT),  # initial measurement read
+        ])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        sensor.setup_minmax(-50., 100.)
+
+        sensor._sample_aht(0.)
+
+        self.assertEqual(self.mux.session_close_on_exit, [True])
 
     def test_web_console_reports_failure_summary_and_recovery(self):
         raw_i2c = FakeModernI2C([])

@@ -272,9 +272,12 @@ class TCA9548A:
             return self._write_control_locked(value)
 
     @contextmanager
-    def session(self):
+    def session(self, close_on_exit=False):
         # ReactorMutex is not reentrant.  Make nested use by the same logical
         # operation safe while retaining a concrete owner for MuxedI2C checks.
+        # Callers that set close_on_exit keep a channel selected throughout a
+        # complete device operation, then isolate every downstream branch.
+        # Only the outermost session owns that cleanup policy.
         owner = greenlet.getcurrent()
         if self._session_owner is owner:
             self._session_depth += 1
@@ -289,8 +292,12 @@ class TCA9548A:
             try:
                 yield
             finally:
-                self._session_depth = 0
-                self._session_owner = None
+                try:
+                    if close_on_exit:
+                        self._disable_all_locked()
+                finally:
+                    self._session_depth = 0
+                    self._session_owner = None
 
     def is_session_owner(self):
         return self._session_owner is greenlet.getcurrent()
@@ -372,14 +379,21 @@ class TCA9548A:
         with self.mutex:
             return self._select_channel_locked(channel)
 
+    def _disable_all_locked(self):
+        if self.last_control == 0:
+            return True
+        if not self._write_control_locked(0x00):
+            # A failed control write or verification leaves the physical mux
+            # state unknown.  Never let a later selection trust stale cache.
+            self.last_control = self.last_channel = None
+            return False
+        self.last_control = 0
+        self.last_channel = None
+        return True
+
     def disable_all(self):
         with self.mutex:
-            if self.last_control == 0:
-                return True
-            if not self._write_control_locked(0x00):
-                return False
-            self.last_channel = None
-            return True
+            return self._disable_all_locked()
 
     def is_busy(self):
         # Sensor timers call this before acquiring the lock.  With no reactor

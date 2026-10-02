@@ -14,6 +14,13 @@ The mux implementation is kept independent of reader-specific code. PN532
 support is integrated by the Happy-Hare-RFID-Reader project, which uses this
 repository's mux and I2C infrastructure from its own PN532 adapter.
 
+Each AHT initialization or measurement selects its channel only for the
+duration of that complete operation, then disables all TCA9548A channels. This
+keeps an idle or disconnected downstream branch isolated from the shared
+upstream I2C bus. Future multi-transfer drivers such as PN532 must hold one
+`mux.session(close_on_exit=True)` around their complete command, ACK, and
+response exchange; they must not open a separate session for each transfer.
+
 ## Hardware and Wiring
 
 <p align="center">
@@ -165,6 +172,11 @@ core will remain installed as a **separate Klipper Extra** at
 `klippy/extras/tca9548a.py`. The Happy-Hare-RFID-Reader PN532 mux adapter
 will live only in `nfc_gates/pn532_tca9548a_driver.py` and reference that
 installed mux core.
+
+The adapter should wrap each complete PN532 command exchange in
+`mux.session(close_on_exit=True)`. This retains one selected channel during
+the command, ACK, and response transfers, then isolates all downstream
+channels when the exchange finishes.
 
 The RFID project and its installer must not bundle, copy, download, or
 overwrite `tca9548a.py`. Some users may already have this add-on installed.
