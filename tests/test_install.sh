@@ -83,6 +83,8 @@ grep -Eq '^tca9548a\.py:[[:space:]]+linked$' \
     "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Eq '^tca9548a_drivers:[[:space:]]+linked$' \
     "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Eq '^Installation:[[:space:]]+completed$' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Current version:         v0.13.0-772-gtest' \
     "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Minimum version:         >= v0.13.0-525-g8965958' \

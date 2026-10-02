@@ -428,7 +428,6 @@ confirm_i2c_recovery_support() {
     display_firmware_summary
     if [[ "${I2C_RECOVERY_SUPPORTED}" -eq 1 ]]; then
         print_status "${COLOR_OK}" "Feature support" "SUPPORTED"
-        print_field "Host protocol" "modern I2C status responses"
         return
     fi
 
@@ -543,5 +542,6 @@ for addon_path in "${ADDON_PATHS[@]}"; do
     print_status "${COLOR_OK}" "${addon_path}" "linked"
 done
 
+print_status "${COLOR_OK}" "Installation" "completed"
 echo ""
 echo "Restart ${FIRMWARE_NAME} from Fluidd or Mainsail to load the add-on."
