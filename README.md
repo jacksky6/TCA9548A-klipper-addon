@@ -96,10 +96,10 @@ Use this command to test the wiring after restarting Klipper:
 TCA_RESET MUX=mux1
 ```
 
-On modern I2C firmware the command writes `0x00` and reads the TCA control
-register after the pulse to verify that every channel is disabled. On legacy
-I2C firmware it sends the hardware pulse without an I2C verification, because
-an unsuccessful legacy verification can shut down the MCU firmware.
+On modern I2C firmware the command reads the TCA control register after the
+pulse to verify that the hardware reset cleared every channel. On legacy I2C
+firmware it sends the hardware pulse without an I2C verification, because an
+unsuccessful legacy verification can shut down the MCU firmware.
 
 When `reset_pin` is configured and the modern I2C protocol reports any error
 while accessing the TCA control register itself, the add-on automatically
@@ -109,12 +109,17 @@ original TCA control operation once. Automatic attempts are limited to one per
 `START_NACK`, does not directly reset the TCA; it remains a sensor retry. If
 that fault later
 prevents access to the TCA control register, the resulting TCA error triggers
-the hardware recovery.
+the hardware recovery. If post-reset verification fails, no further TCA
+control or downstream I2C transfers are submitted until the same recovery
+cooldown expires. This avoids repeatedly submitting timeouts to a stuck bus.
 
 The Console reports an automatic attempt as a short red error line, for
 example `TCA9548A mux1: BUS_TIMEOUT; hardware reset`, followed by a normal
-`reset verified; retrying` line when verification succeeds. The mux status
-also includes reset configuration, counts, and the last reset result.
+`reset verified; retrying` line when verification succeeds. A verification
+failure instead says that the reset pulse was sent and that I2C is paused; it
+does not imply that the GPIO pulse itself failed. The mux status also includes
+reset configuration, counts, pulse time, verification result, and recovery
+pause state.
 
 ## Install
 
