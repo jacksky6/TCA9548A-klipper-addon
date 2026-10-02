@@ -46,6 +46,7 @@ TCA9548A_I2C_ADDR = 0x70
 DEFAULT_RESET_PULSE_TIME = .010
 DEFAULT_RESET_SETTLE_TIME = .010
 DEFAULT_RESET_RECOVERY_COOLDOWN = 30.
+MAX_CONSECUTIVE_AUTO_RESET_FAILURES = 5
 INHERITED_I2C_OPTIONS = set([
     "i2c_mcu", "i2c_bus", "i2c_speed",
     "i2c_software_scl_pin", "i2c_software_sda_pin",
@@ -197,6 +198,7 @@ class TCA9548A:
         self.reset_recovery_cooldown = DEFAULT_RESET_RECOVERY_COOLDOWN
         self.reset_count = 0
         self.auto_reset_count = 0
+        self.auto_reset_failure_count = 0
         self.last_reset_time = None
         self.last_reset_result = None
         self.last_auto_reset_time = None
@@ -302,6 +304,9 @@ class TCA9548A:
         return self.reactor.monotonic() + offset
 
     def _write_control_locked(self, value, allow_auto_reset=True):
+        if self._automatic_recovery_stopped():
+            self.last_control = self.last_channel = None
+            return False
         if self._get_i2c_pause_remaining() > 0.:
             self.last_control = self.last_channel = None
             return False
@@ -319,6 +324,7 @@ class TCA9548A:
             self._report_i2c_failure(exc)
             return False
         self._clear_i2c_pause_locked()
+        self._clear_auto_reset_failures_locked()
         self._reported_i2c_failures.clear()
         if self.select_delay:
             self.reactor.pause(self.reactor.monotonic() + self.select_delay)
@@ -341,6 +347,29 @@ class TCA9548A:
 
     def _set_reset_result(self, result):
         self.last_reset_result = result
+
+    def _automatic_recovery_stopped(self):
+        return (self.auto_reset_failure_count >=
+                MAX_CONSECUTIVE_AUTO_RESET_FAILURES)
+
+    def _clear_auto_reset_failures_locked(self):
+        self.auto_reset_failure_count = 0
+
+    def _record_auto_reset_failure_locked(self):
+        self.auto_reset_failure_count += 1
+        return self._automatic_recovery_stopped()
+
+    def _report_automatic_recovery_stopped(self):
+        reason = (self.last_reset_result or "unknown").replace(
+            "verification failed: ", "", 1)
+        message = (
+            "TCA9548A %s: automatic recovery stopped after %d failed "
+            "resets (%s). Check RESET# wiring and TCA power; repair, then "
+            "run TCA_RESET or power-cycle." %
+            (self.name, MAX_CONSECUTIVE_AUTO_RESET_FAILURES,
+             reason))
+        logging.error(message)
+        self._respond_error(message)
 
     def _get_reset_cooldown_remaining(self, eventtime=None):
         if self.last_reset_time is None:
@@ -377,6 +406,8 @@ class TCA9548A:
     def _attempt_auto_reset_locked(self, error):
         if self.reset_pin is None or not i2c_status_supported(self.i2c):
             return False
+        if self._automatic_recovery_stopped():
+            return False
         now = self.reactor.monotonic()
         remaining = self._get_reset_cooldown_remaining(now)
         if remaining > 0.:
@@ -394,6 +425,10 @@ class TCA9548A:
             self.gcode.respond_info("TCA9548A %s: reset verified; retrying" % (
                 self.name,))
             return True
+        if self._record_auto_reset_failure_locked():
+            self._clear_i2c_pause_locked()
+            self._report_automatic_recovery_stopped()
+            return False
         remaining = self._get_i2c_pause_remaining()
         message = "TCA9548A %s: reset pulse sent; %s; I2C paused for %.0fs" % (
             self.name, self.last_reset_result, remaining)
@@ -429,6 +464,7 @@ class TCA9548A:
         self.last_control = 0
         self.last_channel = None
         self._set_reset_result("verified")
+        self._clear_auto_reset_failures_locked()
         return True
 
     def _reset_locked(self):
@@ -505,6 +541,9 @@ class TCA9548A:
         return False
 
     def _read_control_result_locked(self, allow_auto_reset=True):
+        if self._automatic_recovery_stopped():
+            self.last_control = self.last_channel = None
+            return None, False
         if self._get_i2c_pause_remaining() > 0.:
             self.last_control = self.last_channel = None
             return None, False
@@ -520,6 +559,7 @@ class TCA9548A:
             self._report_i2c_failure(exc)
             return None, False
         self._clear_i2c_pause_locked()
+        self._clear_auto_reset_failures_locked()
         self._reported_i2c_failures.clear()
         if params is None:
             return None, False
@@ -618,6 +658,8 @@ class TCA9548A:
             "reset_recovery_cooldown": self.reset_recovery_cooldown,
             "reset_count": self.reset_count,
             "auto_reset_count": self.auto_reset_count,
+            "auto_reset_failure_count": self.auto_reset_failure_count,
+            "automatic_recovery_stopped": self._automatic_recovery_stopped(),
             "last_reset_time": self.last_reset_time,
             "last_reset_result": self.last_reset_result,
             "last_auto_reset_time": self.last_auto_reset_time,

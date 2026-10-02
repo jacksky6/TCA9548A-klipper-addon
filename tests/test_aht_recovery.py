@@ -483,6 +483,7 @@ class TcaResetTests(unittest.TestCase):
         mux.environment_report_time = 60
         mux.reset_count = 0
         mux.auto_reset_count = 0
+        mux.auto_reset_failure_count = 0
         mux.last_reset_time = None
         mux.last_reset_result = None
         mux.last_auto_reset_time = None
@@ -676,6 +677,44 @@ class TcaResetTests(unittest.TestCase):
         self.reactor.now = 60.2
         self.assertTrue(mux._write_control_locked(0x04))
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
+
+    def test_five_failed_automatic_resets_stop_i2c_attempts(self):
+        responses = []
+        for ignored in range(5):
+            responses.extend([
+                {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+                {"i2c_bus_status": "START_READ_NACK", "response": []},
+            ])
+        mux = self._make_mux(responses=responses)
+
+        for attempt in range(5):
+            self.assertFalse(mux._write_control_locked(0x04))
+            if attempt != 4:
+                self.reactor.now = mux._i2c_pause_until
+
+        self.assertEqual(mux.auto_reset_failure_count, 5)
+        self.assertTrue(mux._automatic_recovery_stopped())
+        self.assertEqual(mux.reset_count, 5)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 10)
+        self.assertEqual(mux.gcode.raw_responses[-1],
+                         "!! TCA9548A mux0: automatic recovery stopped "
+                         "after 5 failed resets (START_READ_NACK). "
+                         "Check RESET# wiring and TCA "
+                         "power; repair, then run TCA_RESET or power-cycle.")
+
+        self.assertFalse(mux._write_control_locked(0x04))
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 10)
+
+    def test_verified_manual_reset_restores_stopped_automatic_recovery(self):
+        mux = self._make_mux(responses=[success([0])])
+        mux.auto_reset_failure_count = 5
+        mux._i2c_pause_until = 60.
+
+        self.assertTrue(mux.reset())
+
+        self.assertEqual(mux.auto_reset_failure_count, 0)
+        self.assertFalse(mux._automatic_recovery_stopped())
+        self.assertEqual(mux._get_i2c_pause_remaining(), 0.)
 
     def test_manual_reset_prevents_immediate_automatic_reset(self):
         mux = self._make_mux()
