@@ -73,6 +73,8 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
 environment_report_time: 60
+# zero_temperature_on_error: False
+# zero_humidity_on_error: False
 
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -273,6 +275,10 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 environment_report_time: 60
+# On a failed AHT transfer, show zero instead of the last valid value.
+# Set these only here, not in a [temperature_sensor] section.
+# zero_temperature_on_error: False
+# zero_humidity_on_error: False
 # Optional TCA RST control. See "Optional Hardware Reset" above.
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -353,6 +359,13 @@ polling interval on the mux so all lanes can be scheduled together.
 `bme280_report_time`. `SHT3X_TCA9548A` also uses the mux interval and does not
 support per-sensor `sht3x_report_time`.
 
+`zero_temperature_on_error` and `zero_humidity_on_error` are optional Boolean
+settings for AHT communication failures. Both default to `False`, which keeps
+the respective last valid value. Set either option to `True` to report `0` for
+only that value after a failure. Set these options only in the `[tca9548a ...]`
+mux section; individual `[temperature_sensor ...]` sections do not support
+them. A failure-generated zero is not checked against `min_temp` or `max_temp`.
+
 At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
 same mux are spread evenly across `environment_report_time` so their periodic
 polls do not all run at the same instant.
@@ -365,12 +378,13 @@ installed Klipper/Kalico `aht10.py` driver. This lets the add-on handle
 recoverable I2C status responses without changing Klipper/Kalico itself.
 
 With a modern host and matching MCU firmware, a failed AHT initialization or
-sample does not stop its timer. The driver records the failure, retains the
-last valid temperature and humidity, marks the reading invalid, and retries a
-full AHT initialization after the shared `environment_report_time`. A
-successful retry marks the reading valid again. Repeated identical errors are
-rate-limited in `klippy.log`. The Fluidd/Mainsail Console shows failure stage,
-I2C status, and retry interval, for example
+sample does not stop its timer. The driver records the failure, marks the
+reading invalid, and retries a full AHT initialization after the shared
+`environment_report_time`. By default it retains the last valid temperature
+and humidity; the two mux-level `zero_*_on_error` options can independently
+report zero for either value. A successful retry marks the reading valid again.
+Repeated identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail
+Console shows failure stage, I2C status, and retry interval, for example
 `TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`, as Klipper
 error lines, so they use the frontend's error color. A later retry may report
 `initialization failed` after a measurement failure; it is reinitializing the

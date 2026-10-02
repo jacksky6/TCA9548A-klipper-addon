@@ -32,6 +32,14 @@ class AHTBase:
                 "%s: aht10_report_time is not supported on TCA9548A AHT "
                 "sensors; set environment_report_time in the [tca9548a] "
                 "mux section" % (config.get_name(),))
+        for option in ("zero_temperature_on_error",
+                       "zero_humidity_on_error"):
+            if not tca9548a._has_option(config, option):
+                continue
+            raise config.error(
+                "%s: %s is not supported in TCA9548A AHT sensors; set it "
+                "in the [tca9548a] mux section" % (
+                    config.get_name(), option))
 
         self.printer = config.get_printer()
         self.name = config.get_name().split()[-1]
@@ -190,6 +198,7 @@ class AHTBase:
             details["i2c_address"] = error.i2c_address
         self.last_error = details
         self.last_error_time = now
+        self._apply_error_values()
 
         key = (stage, details.get("i2c_bus_status"), details["type"],
                details["message"])
@@ -211,6 +220,16 @@ class AHTBase:
                 self._suppressed_log_errors = 0
 
         self._record_web_failure(key, stage, details)
+
+    def _apply_error_values(self):
+        publish_temperature = (
+            self._mux.zero_temperature_on_error and self.temp != 0.)
+        if self._mux.zero_temperature_on_error:
+            self.temp = 0.
+        if self._mux.zero_humidity_on_error:
+            self.humidity = 0.
+        if publish_temperature:
+            self._publish_temperature()
 
     def _record_web_failure(self, key, stage, details):
         error_name = details.get("i2c_bus_status", details["message"])
@@ -313,10 +332,15 @@ class AHTBase:
 
     def _publish_sample(self):
         measured_time = self.reactor.monotonic()
+        self._publish_temperature(measured_time)
+        return measured_time + self.report_time
+
+    def _publish_temperature(self, measured_time=None):
+        if measured_time is None:
+            measured_time = self.reactor.monotonic()
         if self._callback is not None:
             print_time = self.i2c.get_mcu().estimated_print_time(measured_time)
             self._callback(print_time, self.temp)
-        return measured_time + self.report_time
 
     def setup_minmax(self, min_temp, max_temp):
         self.min_temp = min_temp

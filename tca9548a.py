@@ -11,6 +11,8 @@ Typical temperature-sensor configuration::
     i2c_bus: i2c1_PB6_PB7
     i2c_address: 112              # 0x70
     environment_report_time: 60
+    # zero_temperature_on_error: False
+    # zero_humidity_on_error: False
     # Optional hardware reset control:
     # reset_pin: EMU_1:PC12
     # reset_active_high: True      # True for an N-MOS pull-down circuit
@@ -184,6 +186,10 @@ class TCA9548A:
                                             minval=0, maxval=127)
         self.environment_report_time = config.getint(
             "environment_report_time", 60, minval=5)
+        self.zero_temperature_on_error = config.getboolean(
+            "zero_temperature_on_error", False)
+        self.zero_humidity_on_error = config.getboolean(
+            "zero_humidity_on_error", False)
         self.reset_pin = None
         self.reset_active_high = True
         self.reset_pulse_time = DEFAULT_RESET_PULSE_TIME

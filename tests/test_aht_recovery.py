@@ -144,6 +144,8 @@ class FakeMux:
     def __init__(self):
         self.name = "mux0"
         self.environment_report_time = 60
+        self.zero_temperature_on_error = False
+        self.zero_humidity_on_error = False
         self._in_session = False
         self.environment_sensors = []
         self.session_close_on_exit = []
@@ -215,14 +217,18 @@ class FakePrinter:
 
 
 class FakeFileConfig:
+    def __init__(self, options=None):
+        self.options = options or {}
+
     def has_option(self, section, option):
-        return False
+        return option in self.options
 
 
 class FakeConfig:
-    def __init__(self, printer):
+    def __init__(self, printer, options=None):
         self.printer = printer
-        self.fileconfig = FakeFileConfig()
+        self.options = options or {}
+        self.fileconfig = FakeFileConfig(self.options)
 
     def get_printer(self):
         return self.printer
@@ -232,14 +238,14 @@ class FakeConfig:
 
     def get(self, option, default=None):
         values = {"tca9548a": "mux0", "sensor_type": "AHT2X_TCA9548A"}
-        return values.get(option, default)
+        return self.options.get(option, values.get(option, default))
 
     def getint(self, option, default=None, minval=None, maxval=None):
         values = {"tca9548a_channel": 1}
-        return values.get(option, default)
+        return self.options.get(option, values.get(option, default))
 
     def getboolean(self, option, default=False):
-        return default
+        return self.options.get(option, default)
 
     def has_section(self, section):
         return section == "tca9548a mux0"
@@ -544,11 +550,29 @@ class TcaResetTests(unittest.TestCase):
 
         self.assertIs(mux.reset_pin, self.reset_pin)
         self.assertEqual(mux.environment_report_time, 60)
+        self.assertFalse(mux.zero_temperature_on_error)
+        self.assertFalse(mux.zero_humidity_on_error)
         self.assertTrue(mux.reset_active_high)
         self.assertEqual(pins.requests, [("digital_out", "EMU_1:PC12")])
         self.assertEqual(self.reset_pin.max_duration, 0.)
         self.assertEqual(self.reset_pin.start_values, (False, False))
         self.assertIn("TCA_RESET", [command[0] for command in gcode.commands])
+
+    def test_error_value_options_are_read_from_mux_config(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        gcode = FakeTcaGCode()
+        pins = FakePins(self.reset_pin)
+        printer = FakeTcaPrinter(self.reactor, pins, gcode)
+        config = FakeTcaConfig(printer, {
+            "zero_temperature_on_error": True,
+            "zero_humidity_on_error": False,
+        })
+
+        mux = self.core.TCA9548A(config)
+
+        self.assertTrue(mux.zero_temperature_on_error)
+        self.assertFalse(mux.zero_humidity_on_error)
 
     def test_reset_pin_rejects_implicit_pin_inversion(self):
         raw_i2c = FakeModernI2C([])
@@ -679,6 +703,79 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertTrue(sensor.init_sent)
         self.assertGreater(next_waketime, retry_at)
         self.assertEqual(self.printer.shutdowns, [])
+
+    def test_failed_sample_can_zero_values_without_range_shutdown(self):
+        raw_i2c = FakeModernI2C([
+            success(),             # AHT2x initialization command
+            success(),             # initial measurement command
+            success(MEASUREMENT),  # initial measurement read
+            {"i2c_bus_status": "NACK", "response": []},
+        ])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        self.mux.zero_temperature_on_error = True
+        self.mux.zero_humidity_on_error = True
+        sensor = self.aht.AHT2x(self.config)
+        sensor.setup_minmax(10., 90.)
+        published_temperatures = []
+        sensor.setup_callback(
+            lambda print_time, temp: published_temperatures.append(
+                (print_time, temp)))
+
+        with self.mux.session():
+            self.assertTrue(sensor._initialize_sensor())
+
+        self.reactor.now = 100.
+        retry_at = sensor._sample_aht(100.)
+
+        self.assertEqual(retry_at, 160.)
+        self.assertFalse(sensor.valid)
+        self.assertEqual(sensor.temp, 0.)
+        self.assertEqual(sensor.humidity, 0.)
+        self.assertEqual(published_temperatures, [(100., 0.)])
+        self.assertEqual(self.printer.shutdowns, [])
+
+    def test_failure_value_options_are_independent(self):
+        cases = (
+            (False, False, 24., 45., []),
+            (True, False, 0., 45., [(0., 0.)]),
+            (False, True, 24., 0., []),
+            (True, True, 0., 0., [(0., 0.)]),
+        )
+        error = self.aht.AHTMeasurementError("test failure")
+
+        for zero_temperature, zero_humidity, temp, humidity, published in cases:
+            raw_i2c = FakeModernI2C([])
+            self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+            self.mux.zero_temperature_on_error = zero_temperature
+            self.mux.zero_humidity_on_error = zero_humidity
+            sensor = self.aht.AHT2x(self.config)
+            sensor.temp = 24.
+            sensor.humidity = 45.
+            published_temperatures = []
+            sensor.setup_callback(
+                lambda print_time, value: published_temperatures.append(
+                    (print_time, value)))
+
+            sensor._record_failure("measurement", error)
+
+            self.assertEqual(sensor.temp, temp)
+            self.assertEqual(sensor.humidity, humidity)
+            self.assertEqual(published_temperatures, published)
+
+    def test_error_value_options_must_be_set_on_mux(self):
+        for option in ("zero_temperature_on_error",
+                       "zero_humidity_on_error"):
+            config = FakeConfig(self.printer, {option: True})
+
+            with self.assertRaisesRegex(RuntimeError,
+                                        "\\[tca9548a\\] mux section"):
+                self.aht.AHT2x(config)
+
+    def test_aht10_report_time_uses_shared_interval_error(self):
+        config = FakeConfig(self.printer, {"aht10_report_time": 30})
+
+        with self.assertRaisesRegex(RuntimeError, "environment_report_time"):
+            self.aht.AHT2x(config)
 
     def test_aht_sample_requests_channel_isolation_on_session_exit(self):
         raw_i2c = FakeModernI2C([

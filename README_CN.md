@@ -61,6 +61,8 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
 environment_report_time: 60
+# zero_temperature_on_error: False
+# zero_humidity_on_error: False
 
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -228,6 +230,10 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70，A0/A1/A2 均为低；0x71-0x77 使用 113-119
 environment_report_time: 60
+# AHT 通信失败时，将相应值显示为 0，而非保留最后一次有效值。
+# 只能在此复用器段设置，不能写入 [temperature_sensor] 段。
+# zero_temperature_on_error: False
+# zero_humidity_on_error: False
 # 可选 TCA RST 控制，见“可选硬件复位”。
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
@@ -303,6 +309,12 @@ TCA9548A AHT 传感器段刻意不支持 `aht10_report_time`；请在复用器�
 以便一起调度所有通道。`BME280_TCA9548A` 不支持单传感器 `bme280_report_time`，
 `SHT3X_TCA9548A` 也使用复用器间隔，不支持单传感器 `sht3x_report_time`。
 
+`zero_temperature_on_error` 和 `zero_humidity_on_error` 是 AHT 通信失败时的可选
+布尔设置，默认均为 `False`，分别保留温度或湿度的最后一次有效值。将其中任一项设为
+`True`，则仅在失败后将对应值报告为 `0`。这两个选项只能写在 `[tca9548a ...]` 复用器段，
+不支持在单独的 `[temperature_sensor ...]` 段设置。由失败产生的零值不会参与
+`min_temp` 或 `max_temp` 检查。
+
 Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器会在
 `environment_report_time` 内均匀错开，避免周期轮询集中在同一时刻。
 
@@ -313,10 +325,11 @@ Klipper 启动时，每个复用器会记录环境传感器调度计划。同一
 驱动。因此无需修改 Klipper/Kalico 本身即可处理可恢复的 I2C 状态响应。
 
 使用现代主机和匹配 MCU 固件时，AHT 初始化或采样失败不会停止它的定时器。驱动会记录
-失败、保留最后一次有效的温湿度值、将读数标为无效，并在共享的
-`environment_report_time` 后重试完整 AHT 初始化。重试成功后读数会重新有效。相同错误
-在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C 状态和重试
-间隔，例如 `TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`，
+失败、将读数标为无效，并在共享的 `environment_report_time` 后重试完整 AHT 初始化。
+默认保留最后一次有效的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让温度或
+湿度报告为零。重试成功后读数会重新有效。相同错误在 `klippy.log` 中会被限频。
+Fluidd/Mainsail 控制台会显示失败阶段、I2C 状态和重试间隔，例如
+`TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`，
 并将其作为 Klipper 错误行显示，因而使用前端的错误颜色。测量失败后的后续重试若显示
 `initialization failed`，表示驱动正在再次采样前重新初始化传感器。详细的 MCU、地址、
 操作和异常信息仍保留在 `klippy.log`。
