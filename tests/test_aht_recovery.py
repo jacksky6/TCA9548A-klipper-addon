@@ -480,14 +480,13 @@ class TcaResetTests(unittest.TestCase):
         mux.reset_pulse_time = .010
         mux.reset_settle_time = .010
         mux.reset_recovery_cooldown = 30.
+        mux.environment_report_time = 60
         mux.reset_count = 0
         mux.auto_reset_count = 0
         mux.last_reset_time = None
         mux.last_reset_result = None
-        mux.last_reset_pulse_time = None
-        mux.last_reset_verification_result = None
         mux.last_auto_reset_time = None
-        mux._control_recovery_pause_until = None
+        mux._i2c_pause_until = None
         mux.last_control = 0x10
         mux.last_channel = 4
         mux._reported_i2c_failures = set()
@@ -647,7 +646,7 @@ class TcaResetTests(unittest.TestCase):
 
     def test_reset_cooldown_prevents_repeated_hardware_pulses(self):
         mux = self._make_mux()
-        mux.last_reset_pulse_time = 0.
+        mux.last_reset_time = 0.
         self.reactor.now = 1.
         error = self.core.I2CStatusError(mux.i2c, "BUS_TIMEOUT",
                                          "TCA9548A control write", 1, 0)
@@ -658,7 +657,7 @@ class TcaResetTests(unittest.TestCase):
         self.assertEqual(mux.auto_reset_count, 0)
         self.assertEqual(mux.gcode.raw_responses, [])
 
-    def test_failed_reset_pauses_control_transfers_until_cooldown_expires(self):
+    def test_failed_reset_pauses_control_transfers_for_report_interval(self):
         mux = self._make_mux(responses=[
             {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
             {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
@@ -667,13 +666,14 @@ class TcaResetTests(unittest.TestCase):
 
         self.assertFalse(mux._write_control_locked(0x04))
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 2)
-        self.assertEqual(mux.last_reset_verification_result,
+        self.assertEqual(mux.last_reset_result,
                          "verification failed: BUS_TIMEOUT")
+        self.assertAlmostEqual(mux._get_i2c_pause_remaining(), 60.)
 
         self.assertFalse(mux._write_control_locked(0x04))
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 2)
 
-        self.reactor.now = 30.
+        self.reactor.now = 60.2
         self.assertTrue(mux._write_control_locked(0x04))
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
 
@@ -700,7 +700,7 @@ class TcaResetTests(unittest.TestCase):
 
         self.assertEqual(gcmd.responses, [
             "TCA9548A 'mux0': reset pulse sent; verification failed: "
-            "BUS_TIMEOUT; I2C paused for 30s",
+            "BUS_TIMEOUT; I2C paused for 60s",
         ])
 
 
