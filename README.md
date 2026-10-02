@@ -409,6 +409,8 @@ resume sampling. By default a failed sensor retains the last valid temperature
 and humidity; the two mux-level `zero_*_on_error` options can independently
 report zero for either value. BME280 pressure sampling and compensation are
 disabled, so it presents the same temperature and humidity fields as AHT.
+`klippy.log` records continued failures after the fifth and tenth consecutive
+attempt; the fifteenth failure is the final stop notification.
 Repeated identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail
 Console shows failure stage, I2C status, and retry interval, for example
 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`, as
