@@ -287,6 +287,112 @@ class FakeMutex:
         return False
 
 
+class FakeResetPin:
+    def __init__(self, mcu):
+        self.mcu = mcu
+        self.max_duration = None
+        self.start_values = None
+        self.digital_values = []
+
+    def get_mcu(self):
+        return self.mcu
+
+    def setup_max_duration(self, max_duration):
+        self.max_duration = max_duration
+
+    def setup_start_value(self, start_value, shutdown_value):
+        self.start_values = (start_value, shutdown_value)
+
+    def set_digital(self, print_time, value):
+        self.digital_values.append((print_time, value))
+
+
+class FakeTcaGCode(FakeGCode):
+    def __init__(self):
+        super(FakeTcaGCode, self).__init__()
+        self.commands = []
+
+    def register_mux_command(self, command, key, value, callback, desc=None):
+        self.commands.append((command, key, value, callback, desc))
+
+
+class FakeTcaReactor(FakeReactor):
+    def mutex(self):
+        return FakeMutex()
+
+
+class FakePins:
+    def __init__(self, reset_pin):
+        self.reset_pin = reset_pin
+        self.requests = []
+
+    def setup_pin(self, pin_type, pin_desc):
+        self.requests.append((pin_type, pin_desc))
+        return self.reset_pin
+
+
+class FakeTcaPrinter:
+    def __init__(self, reactor, pins, gcode):
+        self.reactor = reactor
+        self.objects = {"pins": pins, "gcode": gcode}
+        self.events = []
+
+    def get_reactor(self):
+        return self.reactor
+
+    def lookup_object(self, name, default=None):
+        return self.objects.get(name, default)
+
+    def register_event_handler(self, event, callback):
+        self.events.append((event, callback))
+
+
+class FakeTcaFileConfig:
+    def __init__(self, options):
+        self.options = options
+
+    def has_option(self, section, option):
+        return option in self.options
+
+
+class FakeTcaConfig:
+    def __init__(self, printer, options=None):
+        self.printer = printer
+        self.options = options or {}
+        self.fileconfig = FakeTcaFileConfig(self.options)
+
+    def get_printer(self):
+        return self.printer
+
+    def get_name(self):
+        return "tca9548a mux0"
+
+    def get(self, option, default=None):
+        defaults = {"i2c_mcu": "mcu", "i2c_bus": "i2c1_PB6_PB7"}
+        return self.options.get(option, defaults.get(option, default))
+
+    def getint(self, option, default=None, minval=None, maxval=None):
+        return self.options.get(option, default)
+
+    def getfloat(self, option, default=None, minval=None, maxval=None,
+                 above=None):
+        return self.options.get(option, default)
+
+    def getboolean(self, option, default=False):
+        return self.options.get(option, default)
+
+    def error(self, message):
+        return RuntimeError(message)
+
+
+class FakeGCmd:
+    def __init__(self):
+        self.responses = []
+
+    def respond_info(self, message):
+        self.responses.append(message)
+
+
 class MuxSessionTests(unittest.TestCase):
     def setUp(self):
         self.bus, self.core, self.aht = _load_driver_modules()
@@ -342,6 +448,107 @@ class MuxSessionTests(unittest.TestCase):
         self.assertEqual(self.write_control.call_args_list, [mock.call(0x00)])
         self.assertIsNone(self.mux.last_control)
         self.assertIsNone(self.mux.last_channel)
+
+
+class TcaResetTests(unittest.TestCase):
+    def setUp(self):
+        self.bus, self.core, self.aht = _load_driver_modules()
+        self.reactor = FakeTcaReactor()
+        self.reset_pin = FakeResetPin(FakeMCU())
+
+    def _make_mux(self, active_high=False, responses=None):
+        mux = object.__new__(self.core.TCA9548A)
+        mux.name = "mux0"
+        mux.reactor = self.reactor
+        mux.mutex = FakeMutex()
+        mux.i2c = FakeModernI2C(responses or [success(), success([0])])
+        mux.reset_pin = self.reset_pin
+        mux.reset_active_high = active_high
+        mux.reset_pulse_time = .010
+        mux.reset_settle_time = .010
+        mux.reset_count = 0
+        mux.last_reset_time = None
+        mux.last_reset_result = None
+        mux.last_control = 0x10
+        mux.last_channel = 4
+        return mux
+
+    def test_direct_reset_pin_pulses_low_then_returns_high(self):
+        mux = self._make_mux(active_high=False)
+
+        self.assertTrue(mux.reset())
+
+        self.assertEqual(self.reset_pin.digital_values, [
+            (0., False), (.010, True),
+        ])
+        self.assertEqual(self.reactor.now, .020)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.last_reset_result, "verified")
+        self.assertEqual(mux.last_control, 0)
+        self.assertIsNone(mux.last_channel)
+
+    def test_mos_reset_pin_pulses_high_then_returns_low(self):
+        mux = self._make_mux(active_high=True)
+
+        self.assertTrue(mux.reset())
+
+        self.assertEqual(self.reset_pin.digital_values, [
+            (0., True), (.010, False),
+        ])
+        self.assertEqual(mux.last_reset_result, "verified")
+
+    def test_legacy_i2c_reset_skips_bus_verification(self):
+        mux = self._make_mux()
+        mux.i2c = FakeLegacyI2C()
+
+        self.assertTrue(mux.reset())
+
+        self.assertEqual(mux.last_reset_result,
+                         "pulsed (not verified on legacy I2C)")
+        self.assertEqual(mux.i2c.writes, [])
+        self.assertIsNone(mux.last_control)
+        self.assertIsNone(mux.last_channel)
+
+    def test_manual_command_reports_unconfigured_reset_pin(self):
+        mux = self._make_mux()
+        mux.reset_pin = None
+        gcmd = FakeGCmd()
+
+        mux.cmd_TCA_RESET(gcmd)
+
+        self.assertEqual(gcmd.responses, [
+            "TCA9548A 'mux0': reset_pin is not configured",
+        ])
+
+    def test_reset_pin_setup_uses_release_value_for_start_and_shutdown(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        gcode = FakeTcaGCode()
+        pins = FakePins(self.reset_pin)
+        printer = FakeTcaPrinter(self.reactor, pins, gcode)
+        config = FakeTcaConfig(printer, {
+            "reset_pin": "EMU_1:PC12",
+            "reset_active_high": True,
+        })
+
+        mux = self.core.TCA9548A(config)
+
+        self.assertIs(mux.reset_pin, self.reset_pin)
+        self.assertEqual(pins.requests, [("digital_out", "EMU_1:PC12")])
+        self.assertEqual(self.reset_pin.max_duration, 0.)
+        self.assertEqual(self.reset_pin.start_values, (False, False))
+        self.assertIn("TCA_RESET", [command[0] for command in gcode.commands])
+
+    def test_reset_pin_rejects_implicit_pin_inversion(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        gcode = FakeTcaGCode()
+        pins = FakePins(self.reset_pin)
+        printer = FakeTcaPrinter(self.reactor, pins, gcode)
+        config = FakeTcaConfig(printer, {"reset_pin": "!EMU_1:PC12"})
+
+        with self.assertRaisesRegex(RuntimeError, "reset_active_high"):
+            self.core.TCA9548A(config)
 
 
 class AHTRecoveryTests(unittest.TestCase):

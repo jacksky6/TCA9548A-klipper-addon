@@ -37,6 +37,8 @@ import greenlet
 from . import bme280, bus, sht3x
 
 TCA9548A_I2C_ADDR = 0x70
+DEFAULT_RESET_PULSE_TIME = .010
+DEFAULT_RESET_SETTLE_TIME = .010
 INHERITED_I2C_OPTIONS = set([
     "i2c_mcu", "i2c_bus", "i2c_speed",
     "i2c_software_scl_pin", "i2c_software_sda_pin",
@@ -177,6 +179,40 @@ class TCA9548A:
                                             minval=0, maxval=127)
         self.environment_report_time = config.getint(
             "environment_report_time", 30, minval=5)
+        self.reset_pin = None
+        self.reset_active_high = False
+        self.reset_pulse_time = DEFAULT_RESET_PULSE_TIME
+        self.reset_settle_time = DEFAULT_RESET_SETTLE_TIME
+        self.reset_count = 0
+        self.last_reset_time = None
+        self.last_reset_result = None
+        reset_pin_desc = config.get("reset_pin", None)
+        if reset_pin_desc is None:
+            for option in ("reset_active_high", "reset_pulse_time",
+                           "reset_settle_time"):
+                if _has_option(config, option):
+                    raise config.error(
+                        "%s requires reset_pin" % (option,))
+        else:
+            if reset_pin_desc.lstrip().startswith("!"):
+                raise config.error(
+                    "reset_pin must not use '!'; set reset_active_high "
+                    "instead")
+            self.reset_active_high = config.getboolean(
+                "reset_active_high", False)
+            self.reset_pulse_time = config.getfloat(
+                "reset_pulse_time", DEFAULT_RESET_PULSE_TIME, above=0.)
+            self.reset_settle_time = config.getfloat(
+                "reset_settle_time", DEFAULT_RESET_SETTLE_TIME, minval=0.)
+            ppins = self.printer.lookup_object("pins")
+            self.reset_pin = ppins.setup_pin("digital_out", reset_pin_desc)
+            self.reset_pin.setup_max_duration(0.)
+            # The TCA RESET# pin must remain inactive while Klipper starts,
+            # restarts, or shuts down. reset_active_high describes the GPIO
+            # level that asserts reset, not the TCA's active-low pin itself.
+            reset_release_value = not self.reset_active_high
+            self.reset_pin.setup_start_value(reset_release_value,
+                                             reset_release_value)
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=TCA9548A_I2C_ADDR, default_speed=100000)
         self.mutex = self.reactor.mutex()
@@ -203,6 +239,9 @@ class TCA9548A:
         self.gcode.register_mux_command("TCA_STATUS", "MUX", self.name,
                                         self.cmd_TCA_STATUS,
                                         desc=self.cmd_TCA_STATUS_help)
+        self.gcode.register_mux_command("TCA_RESET", "MUX", self.name,
+                                        self.cmd_TCA_RESET,
+                                        desc=self.cmd_TCA_RESET_help)
 
     def _handle_connect(self):
         if not self.debug_no_disable:
@@ -270,6 +309,62 @@ class TCA9548A:
     def _write_control(self, value):
         with self.mutex:
             return self._write_control_locked(value)
+
+    def _set_reset_result(self, result):
+        self.last_reset_time = self.reactor.monotonic()
+        self.last_reset_result = result
+
+    def _verify_reset_locked(self):
+        if not i2c_status_supported(self.i2c):
+            # Old MCU firmware shuts down before returning an I2C failure to
+            # Python. Do not turn an optional manual reset into that shutdown.
+            self.last_control = self.last_channel = None
+            self._set_reset_result("pulsed (not verified on legacy I2C)")
+            return True
+        try:
+            i2c_transfer_recoverable(
+                self.i2c, [0x00], operation="TCA9548A reset disable")
+            params = i2c_transfer_recoverable(
+                self.i2c, [], 1, operation="TCA9548A reset verify")
+        except I2CStatusError as exc:
+            self.last_control = self.last_channel = None
+            self._set_reset_result("verification failed: %s" % (exc.status,))
+            logging.error("TCA9548A '%s': reset verification failed: %s",
+                          self.name, exc)
+            return False
+        response = params.get("response") if params is not None else None
+        if not response or response[0] != 0:
+            self.last_control = self.last_channel = None
+            self._set_reset_result("verification failed: control is not 0x00")
+            logging.error("TCA9548A '%s': reset verification read %r, "
+                          "expected 0x00", self.name, response)
+            return False
+        self.last_control = 0
+        self.last_channel = None
+        self._set_reset_result("verified")
+        return True
+
+    def _reset_locked(self):
+        if self.reset_pin is None:
+            self._set_reset_result("not configured")
+            return False
+        now = self.reactor.monotonic()
+        mcu = self.reset_pin.get_mcu()
+        print_time = mcu.estimated_print_time(now)
+        reset_release_value = not self.reset_active_high
+        logging.info("TCA9548A '%s': pulsing hardware reset", self.name)
+        self.last_control = self.last_channel = None
+        self.reset_pin.set_digital(print_time, self.reset_active_high)
+        self.reset_pin.set_digital(print_time + self.reset_pulse_time,
+                                   reset_release_value)
+        self.reactor.pause(now + self.reset_pulse_time +
+                           self.reset_settle_time)
+        self.reset_count += 1
+        return self._verify_reset_locked()
+
+    def reset(self):
+        with self.mutex:
+            return self._reset_locked()
 
     @contextmanager
     def session(self, close_on_exit=False):
@@ -411,6 +506,11 @@ class TCA9548A:
             "i2c_status_supported": i2c_status_supported(self.i2c),
             "environment_report_time": self.environment_report_time,
             "environment_sensor_count": len(self.environment_sensors),
+            "reset_configured": self.reset_pin is not None,
+            "reset_active_high": self.reset_active_high,
+            "reset_count": self.reset_count,
+            "last_reset_time": self.last_reset_time,
+            "last_reset_result": self.last_reset_result,
         }
 
     cmd_TCA_SELECT_help = "Select or disable a TCA9548A mux channel"
@@ -446,6 +546,20 @@ class TCA9548A:
                 self.name, value, channel_text,
                 "supported" if i2c_status_supported(self.i2c)
                 else "legacy"))
+
+    cmd_TCA_RESET_help = "Pulse a TCA9548A hardware reset pin"
+    def cmd_TCA_RESET(self, gcmd):
+        if self.reset_pin is None:
+            gcmd.respond_info(
+                "TCA9548A '%s': reset_pin is not configured" % (
+                    self.name,))
+            return
+        if self.reset():
+            gcmd.respond_info("TCA9548A '%s': reset %s" % (
+                self.name, self.last_reset_result))
+            return
+        gcmd.respond_info("TCA9548A '%s': reset failed (%s)" % (
+            self.name, self.last_reset_result))
 
 
 class MuxedI2C:
