@@ -298,7 +298,10 @@ sample does not stop its timer. The driver records the failure, retains the
 last valid temperature and humidity, marks the reading invalid, and retries a
 full AHT initialization after the shared `environment_report_time`. A
 successful retry marks the reading valid again. Repeated identical errors are
-rate-limited in `klippy.log`.
+rate-limited in `klippy.log`. The Fluidd/Mainsail Console shows short failure
+notifications such as `TCA9548A AHT lane5: START_NACK; retry 30s` as Klipper
+error lines, so they use the frontend's error color. Detailed MCU, address,
+operation, and exception information remains in `klippy.log`.
 
 The AHT object's status includes `valid`, `communication_ok`, `last_error`,
 `last_error_time`, `last_success_time`, `i2c_error_count`, `error_count`, and

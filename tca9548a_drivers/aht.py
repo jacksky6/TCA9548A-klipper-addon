@@ -213,10 +213,9 @@ class AHTBase:
         self._record_web_failure(key, stage, details)
 
     def _record_web_failure(self, key, stage, details):
-        message = (
-            "TCA9548A AHT %s: I2C communication failed during %s: %s; "
-            "retrying in %ds" % (
-                self.name, stage, details["message"], self.report_time))
+        error_name = details.get("i2c_bus_status", "%s failed" % (stage,))
+        message = "TCA9548A AHT %s: %s; retry %ds" % (
+            self.name, error_name, self.report_time)
         if key != self._last_web_error_key:
             self._suppressed_web_errors = 0
             if not self._klippy_ready:
@@ -226,14 +225,13 @@ class AHTBase:
             elif self._pending_web_notification is not None:
                 self._pending_web_notification = (key, message)
             else:
-                self._respond_info(message)
+                self._respond_error(message)
                 self._last_web_error_key = key
         else:
             self._suppressed_web_errors += 1
             if self._suppressed_web_errors >= WEB_FAILURE_NOTICE_INTERVAL:
-                self._respond_info(
-                    "TCA9548A AHT %s: I2C communication still failing; "
-                    "%d repeated failed attempts since last notice" % (
+                self._respond_error(
+                    "TCA9548A AHT %s: still failing (%d attempts)" % (
                         self.name, self._suppressed_web_errors))
                 self._suppressed_web_errors = 0
 
@@ -242,7 +240,7 @@ class AHTBase:
         self._pending_web_notification = None
         if pending is not None and self.communication_ok is False:
             key, message = pending
-            self._respond_info(message)
+            self._respond_error(message)
             self._last_web_error_key = key
         return self.reactor.NEVER
 
@@ -252,7 +250,7 @@ class AHTBase:
                          self.model, self.name)
             if self._last_web_error_key is not None:
                 self._respond_info(
-                    "TCA9548A AHT %s: I2C communication recovered" % (
+                    "TCA9548A AHT %s: recovered" % (
                         self.name,))
         self.valid = True
         self.communication_ok = True
@@ -270,6 +268,23 @@ class AHTBase:
                 gcode.respond_info(message)
         except Exception:
             logging.exception("%s %s: unable to send Console notification",
+                              self.model, self.name)
+
+    def _respond_error(self, message):
+        try:
+            gcode = self.printer.lookup_object("gcode", None)
+            if gcode is None:
+                return
+            respond_raw = getattr(gcode, "respond_raw", None)
+            if respond_raw is not None:
+                # Klipper's standard !! prefix is rendered as an error by
+                # Fluidd and Mainsail, without changing printer state.
+                respond_raw("!! " + message)
+            else:
+                # Retain compatibility with unusual older G-code interfaces.
+                gcode.respond_info(message)
+        except Exception:
+            logging.exception("%s %s: unable to send Console error",
                               self.model, self.name)
 
     def _sample_aht(self, eventtime):

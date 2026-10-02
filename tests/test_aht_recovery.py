@@ -173,9 +173,13 @@ class FakeMux:
 class FakeGCode:
     def __init__(self):
         self.responses = []
+        self.raw_responses = []
 
     def respond_info(self, message):
         self.responses.append(message)
+
+    def respond_raw(self, message):
+        self.raw_responses.append(message)
 
 
 class FakePrinter:
@@ -410,28 +414,26 @@ class AHTRecoveryTests(unittest.TestCase):
                                          3, 0)
 
         sensor._record_failure("measurement", error)
-        self.assertEqual(self.printer.gcode.responses, [
-            "TCA9548A AHT chamber: I2C communication failed during "
-            "measurement: MCU 'mcu' I2C request to addr 56 reports error "
-            "START_NACK during write; retrying in 30s",
+        self.assertEqual(self.printer.gcode.raw_responses, [
+            "!! TCA9548A AHT chamber: START_NACK; retry 30s",
         ])
+        self.assertEqual(self.printer.gcode.responses, [])
 
         for _ in range(119):
             sensor._record_failure("measurement", error)
-        self.assertEqual(len(self.printer.gcode.responses), 1)
+        self.assertEqual(len(self.printer.gcode.raw_responses), 1)
 
         sensor._record_failure("measurement", error)
-        self.assertEqual(self.printer.gcode.responses[-1],
-                         "TCA9548A AHT chamber: I2C communication still "
-                         "failing; 120 repeated failed attempts since last "
-                         "notice")
-        self.assertEqual(len(self.printer.gcode.responses), 2)
+        self.assertEqual(self.printer.gcode.raw_responses[-1],
+                         "!! TCA9548A AHT chamber: still failing "
+                         "(120 attempts)")
+        self.assertEqual(len(self.printer.gcode.raw_responses), 2)
 
         sensor.last_success_time = 1.
         sensor._record_success()
         self.assertEqual(self.printer.gcode.responses[-1],
-                         "TCA9548A AHT chamber: I2C communication recovered")
-        self.assertEqual(len(self.printer.gcode.responses), 3)
+                         "TCA9548A AHT chamber: recovered")
+        self.assertEqual(len(self.printer.gcode.responses), 1)
         self.assertIsNone(sensor._last_web_error_key)
         self.assertEqual(sensor._suppressed_web_errors, 0)
 
@@ -444,6 +446,7 @@ class AHTRecoveryTests(unittest.TestCase):
 
         sensor._record_failure("initialization", error)
         self.assertEqual(self.printer.gcode.responses, [])
+        self.assertEqual(self.printer.gcode.raw_responses, [])
         self.assertIsNotNone(sensor._pending_web_notification)
 
         sensor.handle_ready()
@@ -451,10 +454,8 @@ class AHTRecoveryTests(unittest.TestCase):
             sensor._pending_web_notification_timer, 1.))
         self.assertEqual(sensor._emit_pending_web_notification(1.),
                          self.reactor.NEVER)
-        self.assertEqual(self.printer.gcode.responses, [
-            "TCA9548A AHT chamber: I2C communication failed during "
-            "initialization: MCU 'mcu' I2C request to addr 56 reports error "
-            "START_NACK during write; retrying in 30s",
+        self.assertEqual(self.printer.gcode.raw_responses, [
+            "!! TCA9548A AHT chamber: START_NACK; retry 30s",
         ])
         self.assertEqual(sensor._last_web_error_key, (
             "initialization", "START_NACK", "I2CStatusError",
