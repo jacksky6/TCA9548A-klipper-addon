@@ -68,7 +68,7 @@ print_status() {
 }
 
 print_recovery_notice() {
-    print_section "I2C Recovery"
+    print_section "I2C Recovery Feature"
     print_field "Applies to" "Klipper host and I2C MCU firmware"
     print_field "Minimum version" ">= ${I2C_RECOVERY_MIN_VERSION}"
     print_field "Important" "git pull does not update MCU firmware"
