@@ -45,6 +45,71 @@ ground to downstream devices separately. Devices with the same I2C address can
 be used on different mux channels, because only the selected channel is
 connected to the upstream I2C bus.
 
+### Optional Hardware Reset
+
+Set `reset_pin` in the mux section to let the add-on reset the TCA9548A without
+using I2C. `reset_active_high` describes the **MCU GPIO level that requests a
+reset**. Do not use Klipper's `!` pin inversion prefix with `reset_pin`; the
+add-on rejects it so the configuration has one unambiguous polarity setting.
+
+| Hardware connection | `reset_active_high` | Normal MCU output | Reset MCU output |
+| --- | --- | --- | --- |
+| GPIO directly to TCA `RESET#` | `False` | High | Low |
+| GPIO to an N-MOS gate; N-MOS pulls `RESET#` low | `True` | Low | High |
+
+For a TCA9548A powered from 5V, use the N-MOS pull-down arrangement. Connect a
+10k resistor from `RESET#` to the TCA's 5V supply, connect the MOS drain to
+`RESET#`, source to GND, and gate to the MCU GPIO with a 10k gate pull-down to
+GND. This lets the 5V pull-up produce a valid high level while the MCU only
+drives the MOS gate. A 3.3V push-pull GPIO connected directly to a 5V
+`RESET#` cannot release the pin to 5V and is not recommended.
+
+Example for the N-MOS arrangement shown above:
+
+```ini
+[tca9548a mux1]
+i2c_mcu: EMU_1
+i2c_bus: i2c1_PB6_PB7
+i2c_address: 112
+environment_report_time: 30
+
+reset_pin: EMU_1:PC12
+reset_active_high: True
+# reset_pulse_time: 0.010          # default: 10 ms
+# reset_settle_time: 0.010         # default: 10 ms
+# reset_recovery_cooldown: 30      # default: 30 s
+```
+
+At Klipper startup, MCU restart, and shutdown, the pin is set to its normal
+non-reset level. A reset pulse clears the TCA9548A control register and
+disconnects all downstream I2C channels; it does **not** remove 3.3V/5V power
+from downstream devices.
+
+Use this command to test the wiring after restarting Klipper:
+
+```text
+TCA_RESET MUX=mux1
+```
+
+On modern I2C firmware the command writes `0x00` and reads the TCA control
+register after the pulse to verify that every channel is disabled. On legacy
+I2C firmware it sends the hardware pulse without an I2C verification, because
+an unsuccessful legacy verification can shut down the MCU firmware.
+
+When `reset_pin` is configured and the modern I2C protocol reports any error
+while accessing the TCA control register itself, the add-on automatically
+pulses the reset pin, verifies the all-channels-disabled state, and retries the
+original TCA control operation once. Automatic attempts are limited to one per
+30 seconds by default. A downstream device error, such as an AHT `START_NACK`,
+does not directly reset the TCA; it remains a sensor retry. If that fault later
+prevents access to the TCA control register, the resulting TCA error triggers
+the hardware recovery.
+
+The Console reports an automatic attempt as a short red error line, for
+example `TCA9548A mux1: BUS_TIMEOUT; hardware reset`, followed by a normal
+`reset verified; retrying` line when verification succeeds. The mux status
+also includes reset configuration, counts, and the last reset result.
+
 ## Install
 
 Run the following on the Klipper or Kalico host:
@@ -206,6 +271,9 @@ i2c_mcu: mmu
 i2c_bus: i2c2_PB10_PB11
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 environment_report_time: 30
+# Optional TCA RESET# control. See "Optional Hardware Reset" above.
+# reset_pin: mmu:PC12
+# reset_active_high: True
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
@@ -312,8 +380,10 @@ This recovery applies only to I2C transport errors and only to the AHT sensor
 types above in the current release. It does not change BME280, SHT3X, PN532, or
 other downstream device error semantics. A configured AHT `min_temp` or
 `max_temp` violation remains a normal Klipper safety shutdown. An I2C error
-does not toggle the TCA9548A `RST` pin, issue a downstream reset, or remove
-power from any downstream device.
+does not itself toggle the TCA9548A `RST` pin, issue a downstream reset, or
+remove power from any downstream device. With an optional configured
+`reset_pin`, a later error while accessing the TCA control register can trigger
+the mux hardware recovery described above.
 
 If your TCA9548A has A0/A1/A2 pulled high or low differently, adjust the mux
 `i2c_address` from the default `112` (`0x70`). Klipper expects I2C addresses in

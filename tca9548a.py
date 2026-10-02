@@ -11,6 +11,9 @@ Typical temperature-sensor configuration::
     i2c_bus: i2c1_PB6_PB7
     i2c_address: 112              # 0x70
     environment_report_time: 30
+    # Optional hardware reset control:
+    # reset_pin: EMU_1:PC12
+    # reset_active_high: True      # True for an N-MOS pull-down circuit
 
     [temperature_sensor chamber]
     sensor_type: AHT2X_TCA9548A
