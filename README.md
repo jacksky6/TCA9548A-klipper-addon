@@ -376,6 +376,12 @@ notifications such as `TCA9548A AHT lane5: START_NACK; retry 30s` as Klipper
 error lines, so they use the frontend's error color. Detailed MCU, address,
 operation, and exception information remains in `klippy.log`.
 
+After an AHT failure has been shown in the Console, its first successful retry
+emits `TCA9548A AHT lane5: recovered` as a normal Console line. This state is
+kept only for the current Klipper process: a Klipper restart starts a new
+sensor session and does not emit a delayed recovery message. A startup failure
+that recovers before it is shown in the Console also remains silent.
+
 The AHT object's status includes `valid`, `communication_ok`, `last_error`,
 `last_error_time`, `last_success_time`, `i2c_error_count`, `error_count`, and
 `i2c_status_supported`, as well as `tca9548a_channel`. The same fields are

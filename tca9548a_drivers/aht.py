@@ -245,10 +245,13 @@ class AHTBase:
         return self.reactor.NEVER
 
     def _record_success(self):
-        if not self.communication_ok and self.last_success_time is not None:
+        was_unavailable = not self.communication_ok
+        web_failure_reported = self._last_web_error_key is not None
+        if was_unavailable and (self.last_success_time is not None
+                                or web_failure_reported):
             logging.info("%s %s: I2C communication recovered",
                          self.model, self.name)
-            if self._last_web_error_key is not None:
+            if web_failure_reported:
                 self._respond_info(
                     "TCA9548A AHT %s: recovered" % (
                         self.name,))

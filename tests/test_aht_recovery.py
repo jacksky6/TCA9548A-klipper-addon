@@ -714,7 +714,7 @@ class AHTRecoveryTests(unittest.TestCase):
                          "(120 attempts)")
         self.assertEqual(len(self.printer.gcode.raw_responses), 2)
 
-        sensor.last_success_time = 1.
+        self.assertIsNone(sensor.last_success_time)
         sensor._record_success()
         self.assertEqual(self.printer.gcode.responses[-1],
                          "TCA9548A AHT chamber: recovered")
