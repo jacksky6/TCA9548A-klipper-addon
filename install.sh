@@ -45,6 +45,8 @@ print_banner() {
     print_colored "${COLOR_TITLE}" "+------------------------------------------------------------+"
     print_colored "${COLOR_TITLE}" "|                 TCA9548A Add-on Installer                 |"
     print_colored "${COLOR_TITLE}" "+------------------------------------------------------------+"
+    print_colored "${COLOR_TITLE}" "TCA9548A multiplexer support for multiple I2C sensors"
+    print_colored "${COLOR_TITLE}" "Supported sensors: AHT1x, AHT2x, AHT3x, BME280, SHT3X"
 }
 
 print_section() {
