@@ -88,7 +88,12 @@ class SHT3XTCA9548A(EnvironmentRecoveryMixin, sht3x.SHT3X):
     def _sample_initialized(self, eventtime):
         previous_values = (self.temp, self.humidity)
         self.i2c.clear_error()
-        result = super(SHT3XTCA9548A, self)._sample_sht3x(eventtime)
+        try:
+            result = super(SHT3XTCA9548A, self)._sample_sht3x(eventtime)
+        except Exception as exc:
+            self.temp, self.humidity = previous_values
+            self._record_failure("measurement", exc)
+            return False
         if result == self.reactor.NEVER:
             # The native driver clears both values when an exception escapes.
             # Restore them before applying the shared per-value error policy.

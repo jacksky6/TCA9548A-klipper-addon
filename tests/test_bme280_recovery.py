@@ -236,10 +236,12 @@ def _load_driver_modules():
 
         def _sample_bme280(self, eventtime):
             try:
-                self.i2c.i2c_read([0xF7], 8)
+                params = self.i2c.i2c_read([0xF7], 8)
             except Exception:
                 self.temp = self.humidity = self.pressure = 0.
                 return self.reactor.NEVER
+            if params["response"] == [255]:
+                raise ValueError("malformed measurement")
             self.temp = 24.
             self.humidity = 45.
             self.pressure = 1005.
@@ -360,6 +362,23 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertGreater(sensor._sample_bme280(30.), 30.)
         self.assertTrue(sensor.valid)
         self.assertEqual(published, [(30., 24.)])
+
+    def test_malformed_sample_retries_without_losing_valid_values(self):
+        sensor, published = self._make_sensor([
+            success(),
+            success([0] * 8),
+            success([255]),
+        ])
+        sensor.handle_connect()
+
+        self.reactor.now = 20.
+        self.assertEqual(sensor._sample_bme280(20.), 80.)
+
+        self.assertFalse(sensor.valid)
+        self.assertEqual((sensor.temp, sensor.humidity, sensor.pressure),
+                         (24., 45., 1005.))
+        self.assertEqual(sensor.last_error["type"], "ValueError")
+        self.assertEqual(published, [(0., 24.)])
 
     def test_driver_rejects_sensor_level_error_value_option(self):
         config = FakeConfig(self.printer, {"zero_humidity_on_error": True})

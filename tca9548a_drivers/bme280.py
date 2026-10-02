@@ -108,7 +108,12 @@ class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
     def _sample_initialized(self, eventtime):
         previous_values = (self.temp, self.humidity, self.pressure)
         self.i2c.clear_error()
-        result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
+        try:
+            result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
+        except Exception as exc:
+            self.temp, self.humidity, self.pressure = previous_values
+            self._record_failure("measurement", exc)
+            return False
         if result == self.reactor.NEVER:
             # The native driver clears values before returning NEVER. Restore
             # them so the shared mux-level error policy can choose per value.

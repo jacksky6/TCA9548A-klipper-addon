@@ -235,10 +235,12 @@ def _load_driver_modules():
 
         def _sample_sht3x(self, eventtime):
             try:
-                self.i2c.i2c_read([0xE0, 0x00], 6, retry=False)
+                params = self.i2c.i2c_read([0xE0, 0x00], 6, retry=False)
             except Exception:
                 self.temp = self.humidity = 0.
                 return self.reactor.NEVER
+            if params["response"] == [255]:
+                raise ValueError("malformed measurement")
             self.temp = 23.
             self.humidity = 44.
             self._callback(self.i2c.get_mcu().estimated_print_time(
@@ -347,6 +349,22 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.assertGreater(sensor._sample_sht3x(30.), 30.)
         self.assertTrue(sensor.valid)
         self.assertEqual(published, [(30., 23.)])
+
+    def test_malformed_sample_retries_without_losing_valid_values(self):
+        sensor, published = self._make_sensor([
+            success(),
+            success([0] * 6),
+            success([255]),
+        ])
+        sensor.handle_connect()
+
+        self.reactor.now = 20.
+        self.assertEqual(sensor._sample_sht3x(20.), 80.)
+
+        self.assertFalse(sensor.valid)
+        self.assertEqual((sensor.temp, sensor.humidity), (23., 44.))
+        self.assertEqual(sensor.last_error["type"], "ValueError")
+        self.assertEqual(published, [(0., 23.)])
 
     def test_driver_rejects_sensor_level_error_value_option(self):
         config = FakeConfig(self.printer, {"zero_temperature_on_error": True})
