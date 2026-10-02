@@ -9,10 +9,10 @@
 I2C 接口不足时，TCA9548A 可让多个下游设备共用一条硬件 I2C 总线，同时按复用器
 通道独立寻址。
 
-每次 AHT 初始化或测量只会在完整操作期间选中对应通道，完成后关闭 TCA9548A 的全部
-通道。这样空闲或断开的下游支路会与共享的上游 I2C 总线隔离。将来的多次传输驱动
-（例如 PN532）必须用一个 `mux.session(close_on_exit=True)` 包住完整的命令、ACK
-和响应交换，不能将每次传输拆成独立会话。
+每次受支持环境传感器的初始化或测量只会在完整操作期间选中对应通道，完成后关闭
+TCA9548A 的全部通道。这样空闲或断开的下游支路会与共享的上游 I2C 总线隔离。将来的多次传输驱动
+（例如 PN532）必须用一个 `mux.session(close_on_exit=True)` 包住完整的命令、
+ACK 和响应交换，不能将每次传输拆成独立会话。
 
 ## 硬件与接线
 
@@ -88,7 +88,7 @@ TCA_RESET MUX=mux1
 
 当配置了 `reset_pin`，且现代 I2C 协议在访问 TCA 控制寄存器本身时报告任何错误，
 扩展会自动发送复位脉冲、验证所有通道均已关闭，并只重试一次原控制操作。默认每 30 秒
-最多自动尝试一次。AHT `START_NACK` 一类的下游设备错误不会直接复位 TCA，而是仍按
+最多自动尝试一次。下游传感器的 `START_NACK` 一类错误不会直接复位 TCA，而是仍按
 传感器逻辑重试；若该故障之后妨碍访问 TCA 控制寄存器，产生的 TCA 错误才会触发硬件
 恢复。
 
@@ -127,7 +127,7 @@ tca9548a_drivers/
 目标分支必须已存在于本地或本地 `origin` 缓存中。非交互运行时，发现更新只会提示，
 安装仍使用本地文件继续执行。
 
-### AHT I2C 恢复检查
+### I2C 恢复特征检查
 
 安装时，脚本会检查目标 Klipper 或 Kalico 的 `bus.py` 是否具备返回
 `i2c_bus_status` 的现代 `i2c_transfer` 协议。它会显示检测到的固件类型和当前 Git
@@ -135,12 +135,12 @@ tca9548a_drivers/
 为 `v0.13.0-525-g8965958`；需要此版本或更新的、相互匹配的主机和 MCU 固件。检测结果
 分为两个层级：
 
-- **支持的主机源码：** 独立 AHT 驱动可在主机侧接收 I2C `NACK`、`START_NACK`、
+- **支持的主机源码：** 扩展的可恢复环境传感器驱动可在主机侧接收 I2C `NACK`、`START_NACK`、
   `START_READ_NACK` 与 `BUS_TIMEOUT` 状态，而不经过会将这些状态升级为主机停机的
   Klipper 公共 I2C 辅助接口。相关 MCU 仍必须用匹配的现代固件重新编译并刷写。
   驱动的 `i2c_status_supported` 状态字段显示配置 MCU 的最终运行时结果。
 - **旧版主机源码：** 旧版 MCU 固件会在 Python 驱动处理前，对这类 I2C 失败执行自身的
-  `shutdown()`。扩展仍兼容此类源码，但无法保证缺失或失效的 AHT 不会停止
+  `shutdown()`。扩展仍兼容此类源码，但无法保证缺失或失效的环境传感器不会停止
   Klipper/Kalico。安装程序会解释该限制并要求确认后才继续。
 
 有意在旧版目标上非交互安装时，使用：
@@ -230,7 +230,7 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70，A0/A1/A2 均为低；0x71-0x77 使用 113-119
 environment_report_time: 60
-# AHT 通信失败时，将相应值显示为 0，而非保留最后一次有效值。
+# 受支持环境传感器通信失败时，将相应值显示为 0，而非保留最后一次有效值。
 # 只能在此复用器段设置，不能写入 [temperature_sensor] 段。
 # zero_temperature_on_error: False
 # zero_humidity_on_error: False
@@ -309,46 +309,47 @@ TCA9548A AHT 传感器段刻意不支持 `aht10_report_time`；请在复用器�
 以便一起调度所有通道。`BME280_TCA9548A` 不支持单传感器 `bme280_report_time`，
 `SHT3X_TCA9548A` 也使用复用器间隔，不支持单传感器 `sht3x_report_time`。
 
-`zero_temperature_on_error` 和 `zero_humidity_on_error` 是 AHT 通信失败时的可选
-布尔设置，默认均为 `False`，分别保留温度或湿度的最后一次有效值。将其中任一项设为
-`True`，则仅在失败后将对应值报告为 `0`。这两个选项只能写在 `[tca9548a ...]` 复用器段，
-不支持在单独的 `[temperature_sensor ...]` 段设置。由失败产生的零值不会参与
-`min_temp` 或 `max_temp` 检查。
+`zero_temperature_on_error` 和 `zero_humidity_on_error` 是 AHT、BME280 和 SHT3X
+通信失败时的可选布尔设置，默认均为 `False`，分别保留温度或湿度的最后一次有效值。将其中
+任一项设为 `True`，则仅在失败后将对应值报告为 `0`。这两个选项只能写在
+`[tca9548a ...]` 复用器段，不支持在单独的 `[temperature_sensor ...]` 段设置。由失败
+产生的零值不会参与 `min_temp` 或 `max_temp` 检查。
 
 Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器会在
 `environment_report_time` 内均匀错开，避免周期轮询集中在同一时刻。
 
-## AHT 通信恢复
+## 环境传感器 I2C 恢复
 
-`AHT1X_TCA9548A`、`AHT2X_TCA9548A` 和 `AHT3X_TCA9548A` 由扩展独立的
-`tca9548a_drivers/aht.py` 维护，而不是继承系统已安装的 Klipper/Kalico `aht10.py`
-驱动。因此无需修改 Klipper/Kalico 本身即可处理可恢复的 I2C 状态响应。
+`AHT1X_TCA9548A`、`AHT2X_TCA9548A` 和 `AHT3X_TCA9548A` 使用扩展独立的
+`tca9548a_drivers/aht.py` 驱动。`BME280_TCA9548A` 和 `SHT3X_TCA9548A` 保留系统
+已安装 Klipper/Kalico 的测量算法，但使用扩展提供的恢复包装与同一可恢复复用器传输层。
+无需修改 Klipper/Kalico 本身。
 
-使用现代主机和匹配 MCU 固件时，AHT 初始化或采样失败不会停止它的定时器。驱动会记录
-失败、将读数标为无效，并在共享的 `environment_report_time` 后重试完整 AHT 初始化。
-默认保留最后一次有效的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让温度或
-湿度报告为零。重试成功后读数会重新有效。相同错误在 `klippy.log` 中会被限频。
-Fluidd/Mainsail 控制台会显示失败阶段、I2C 状态和重试间隔，例如
-`TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`，
+使用现代主机和匹配 MCU 固件时，任一受支持类型的初始化或采样失败都不会停止其定时器。
+驱动会记录失败、将读数标为无效，并在共享的 `environment_report_time` 后重试完整传感器
+初始化。默认保留最后一次有效的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让
+温度或湿度报告为零。BME280 的气压始终保留最后一次有效值。重试成功后读数会重新有效。
+相同错误在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C 状态和
+重试间隔，例如 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`，
 并将其作为 Klipper 错误行显示，因而使用前端的错误颜色。测量失败后的后续重试若显示
 `initialization failed`，表示驱动正在再次采样前重新初始化传感器。详细的 MCU、地址、
 操作和异常信息仍保留在 `klippy.log`。
 
-某个 AHT 失败已显示在控制台后，下一次首次成功的重试会以普通控制台行显示
-`TCA9548A AHT lane5: recovered`。该关联状态只保存在当前 Klipper 进程中：Klipper
+某个失败已显示在控制台后，下一次首次成功的重试会以普通控制台行显示，例如
+`TCA9548A SHT3X chamber: recovered`。该关联状态只保存在当前 Klipper 进程中：Klipper
 重启会创建新的传感器会话，不会延迟补发恢复消息。启动阶段的失败若在显示到控制台前
 已恢复，同样保持静默。
 
-AHT 对象状态包括 `valid`、`communication_ok`、`last_error`、`last_error_time`、
-`last_success_time`、`i2c_error_count`、`error_count`、`i2c_status_supported` 和
-`tca9548a_channel`。温度传感器对象可用时，这些字段也会加入关联的
-`temperature_sensor` 状态。
+每个可恢复环境传感器对象的状态均包括 `valid`、`communication_ok`、`last_error`、
+`last_error_time`、`last_success_time`、`i2c_error_count`、`error_count`、
+`i2c_status_supported` 和 `tca9548a_channel`。温度传感器对象可用时，这些字段也会加入
+关联的 `temperature_sensor` 状态。
 
-当前恢复机制只适用于 I2C 传输错误和上述 AHT 类型，不改变 BME280、SHT3X、PN532 或
-其他下游设备的错误语义。配置 AHT 的 `min_temp` 或 `max_temp` 违反仍属于普通 Klipper
-安全停机。I2C 错误本身不会切换 TCA9548A `RST` 引脚、对下游设备发送复位或切断下游
-电源。配置了可选的 `reset_pin` 后，之后发生的 TCA 控制寄存器访问错误才可能触发前述
-复用器硬件恢复。
+当前恢复机制只适用于上述 AHT、BME280、SHT3X 类型的 I2C 传输错误与损坏测量数据，
+不改变 PN532 或其他下游设备的错误语义。配置传感器的 `min_temp` 或 `max_temp` 违反
+仍属于普通 Klipper 安全停机。I2C 错误本身不会切换 TCA9548A `RST` 引脚、对下游设备
+发送复位或切断下游电源。配置了可选的 `reset_pin` 后，之后发生的 TCA 控制寄存器访问
+错误才可能触发前述复用器硬件恢复。
 
 若 TCA9548A 的 A0/A1/A2 上拉或下拉方式不同，请调整 `i2c_address`。默认 `112`
 即 `0x70`；Klipper 要求十进制 I2C 地址。AHT20 的 `0x38` 地址应写为 `56`，SHT3X 默认

@@ -12,12 +12,13 @@ for all required devices. A TCA9548A allows multiple downstream devices to
 share one hardware I2C bus while remaining independently addressable by mux
 channel.
 
-Each AHT initialization or measurement selects its channel only for the
-duration of that complete operation, then disables all TCA9548A channels. This
-keeps an idle or disconnected downstream branch isolated from the shared
-upstream I2C bus. Future multi-transfer drivers such as PN532 must hold one
-`mux.session(close_on_exit=True)` around their complete command, ACK, and
-response exchange; they must not open a separate session for each transfer.
+Each supported environment sensor initialization or measurement selects its
+channel only for the duration of that complete operation, then disables all
+TCA9548A channels. This keeps an idle or disconnected downstream branch
+isolated from the shared upstream I2C bus. Future multi-transfer drivers such
+as PN532 must hold one `mux.session(close_on_exit=True)` around their complete
+command, ACK, and response exchange; they must not open a separate session for
+each transfer.
 
 ## Hardware and Wiring
 
@@ -104,8 +105,9 @@ When `reset_pin` is configured and the modern I2C protocol reports any error
 while accessing the TCA control register itself, the add-on automatically
 pulses the reset pin, verifies the all-channels-disabled state, and retries the
 original TCA control operation once. Automatic attempts are limited to one per
-30 seconds by default. A downstream device error, such as an AHT `START_NACK`,
-does not directly reset the TCA; it remains a sensor retry. If that fault later
+30 seconds by default. A downstream device error, such as a sensor
+`START_NACK`, does not directly reset the TCA; it remains a sensor retry. If
+that fault later
 prevents access to the TCA control register, the resulting TCA error triggers
 the hardware recovery.
 
@@ -152,7 +154,7 @@ exist locally or in the local `origin` cache. In a non-interactive run, an
 available update is reported but not installed; the installer continues with
 local files.
 
-### AHT I2C Recovery Check
+### I2C Recovery Feature Check
 
 During installation, the script checks the target Klipper or Kalico `bus.py`
 for the modern `i2c_transfer` protocol with `i2c_bus_status` responses.
@@ -161,7 +163,8 @@ was introduced by Klipper commit `8965958a8b6c` on 2026-02-07, which is
 reported by `git describe` as `v0.13.0-525-g8965958`; use that version or a
 newer matching host and MCU firmware. The result has two distinct levels:
 
-- **Supported host source:** the standalone AHT driver can receive I2C
+- **Supported host source:** the add-on's recoverable environment sensor
+  drivers can receive I2C
   `NACK`, `START_NACK`, `START_READ_NACK`, and `BUS_TIMEOUT` statuses in the
   host instead of using Klipper's public I2C helper that turns those statuses
   into a host shutdown. The relevant MCU must still be rebuilt and flashed
@@ -170,8 +173,8 @@ newer matching host and MCU firmware. The result has two distinct levels:
 - **Legacy host source:** legacy MCU firmware calls its own `shutdown()` for
   these I2C failures before any Python driver can handle them. The add-on is
   compatible with that source, but cannot guarantee that a missing or failed
-  AHT sensor will not stop Klipper/Kalico. The installer explains this and
-  requests confirmation before continuing.
+  environment sensor will not stop Klipper/Kalico. The installer explains this
+  and requests confirmation before continuing.
 
 For a deliberate non-interactive legacy installation, use:
 
@@ -275,7 +278,8 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 environment_report_time: 60
-# On a failed AHT transfer, show zero instead of the last valid value.
+# On a failed supported environment sensor transfer, show zero instead of the
+# last valid value.
 # Set these only here, not in a [temperature_sensor] section.
 # zero_temperature_on_error: False
 # zero_humidity_on_error: False
@@ -360,54 +364,58 @@ polling interval on the mux so all lanes can be scheduled together.
 support per-sensor `sht3x_report_time`.
 
 `zero_temperature_on_error` and `zero_humidity_on_error` are optional Boolean
-settings for AHT communication failures. Both default to `False`, which keeps
-the respective last valid value. Set either option to `True` to report `0` for
-only that value after a failure. Set these options only in the `[tca9548a ...]`
-mux section; individual `[temperature_sensor ...]` sections do not support
-them. A failure-generated zero is not checked against `min_temp` or `max_temp`.
+settings for AHT, BME280, and SHT3X communication failures. Both default to
+`False`, which keeps the respective last valid value. Set either option to
+`True` to report `0` for only that value after a failure. Set these options only
+in the `[tca9548a ...]` mux section; individual `[temperature_sensor ...]`
+sections do not support them. A failure-generated zero is not checked against
+`min_temp` or `max_temp`.
 
 At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
 same mux are spread evenly across `environment_report_time` so their periodic
 polls do not all run at the same instant.
 
-## AHT Communication Recovery
+## Environment Sensor I2C Recovery
 
-`AHT1X_TCA9548A`, `AHT2X_TCA9548A`, and `AHT3X_TCA9548A` are maintained by the
-add-on's standalone `tca9548a_drivers/aht.py`, rather than inheriting the
-installed Klipper/Kalico `aht10.py` driver. This lets the add-on handle
-recoverable I2C status responses without changing Klipper/Kalico itself.
+`AHT1X_TCA9548A`, `AHT2X_TCA9548A`, and `AHT3X_TCA9548A` use the add-on's
+standalone `tca9548a_drivers/aht.py` driver. `BME280_TCA9548A` and
+`SHT3X_TCA9548A` retain the installed Klipper/Kalico measurement algorithms,
+but use add-on recovery wrappers and the same recoverable mux transport. No
+Klipper/Kalico source changes are required.
 
-With a modern host and matching MCU firmware, a failed AHT initialization or
-sample does not stop its timer. The driver records the failure, marks the
-reading invalid, and retries a full AHT initialization after the shared
-`environment_report_time`. By default it retains the last valid temperature
-and humidity; the two mux-level `zero_*_on_error` options can independently
-report zero for either value. A successful retry marks the reading valid again.
-Repeated identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail
-Console shows failure stage, I2C status, and retry interval, for example
-`TCA9548A AHT lane5: measurement failed: START_NACK; retry in 60s`, as Klipper
-error lines, so they use the frontend's error color. A later retry may report
-`initialization failed` after a measurement failure; it is reinitializing the
-sensor before trying another sample. Detailed MCU, address, operation, and
-exception information remains in `klippy.log`.
+With a modern host and matching MCU firmware, a failed initialization or sample
+from any supported type does not stop its timer. The driver records the
+failure, marks the reading invalid, and retries a full sensor initialization
+after the shared `environment_report_time`. By default it retains the last
+valid temperature and humidity; the two mux-level `zero_*_on_error` options can
+independently report zero for either value. BME280 pressure always retains its
+last valid value. A successful retry marks the reading valid again. Repeated
+identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail Console
+shows failure stage, I2C status, and retry interval, for example
+`TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`, as
+Klipper error lines, so they use the frontend's error color. A later retry may
+report `initialization failed` after a measurement failure; it is
+reinitializing the sensor before trying another sample. Detailed MCU, address,
+operation, and exception information remains in `klippy.log`.
 
-After an AHT failure has been shown in the Console, its first successful retry
-emits `TCA9548A AHT lane5: recovered` as a normal Console line. This state is
-kept only for the current Klipper process: a Klipper restart starts a new
-sensor session and does not emit a delayed recovery message. A startup failure
-that recovers before it is shown in the Console also remains silent.
+After a failure has been shown in the Console, the first successful retry emits
+for example `TCA9548A SHT3X chamber: recovered` as a normal Console line. This
+state is kept only for the current Klipper process: a Klipper restart starts a
+new sensor session and does not emit a delayed recovery message. A startup
+failure that recovers before it is shown in the Console also remains silent.
 
-The AHT object's status includes `valid`, `communication_ok`, `last_error`,
-`last_error_time`, `last_success_time`, `i2c_error_count`, `error_count`, and
-`i2c_status_supported`, as well as `tca9548a_channel`. The same fields are
-added to the linked `temperature_sensor` status when it is available.
+Each recoverable environment sensor object's status includes `valid`,
+`communication_ok`, `last_error`, `last_error_time`, `last_success_time`,
+`i2c_error_count`, `error_count`, and `i2c_status_supported`, as well as
+`tca9548a_channel`. The same fields are added to the linked
+`temperature_sensor` status when it is available.
 
-This recovery applies only to I2C transport errors and only to the AHT sensor
-types above in the current release. It does not change BME280, SHT3X, PN532, or
-other downstream device error semantics. A configured AHT `min_temp` or
-`max_temp` violation remains a normal Klipper safety shutdown. An I2C error
-does not itself toggle the TCA9548A `RST` pin, issue a downstream reset, or
-remove power from any downstream device. With an optional configured
+This recovery applies only to I2C transport and malformed-measurement errors
+for AHT, BME280, and SHT3X types above in the current release. It does not
+change PN532 or other downstream device error semantics. A configured sensor
+`min_temp` or `max_temp` violation remains a normal Klipper safety shutdown.
+An I2C error does not itself toggle the TCA9548A `RST` pin, issue a downstream
+reset, or remove power from any downstream device. With an optional configured
 `reset_pin`, a later error while accessing the TCA control register can trigger
 the mux hardware recovery described above.
 

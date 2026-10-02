@@ -89,6 +89,8 @@ grep -Fq 'Current version:         v0.13.0-772-gtest' \
     "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Minimum version:         >= v0.13.0-525-g8965958' \
     "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Fq 'Sensor drivers:          AHT1x/AHT2x/AHT3x, BME280, SHT3X' \
+    "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Eq '^Update:[[:space:]]+current$' "${TEMPORARY_DIRECTORY}/modern.log"
 
 MOCK_UPDATE_AVAILABLE=1 PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
