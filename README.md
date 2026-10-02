@@ -12,10 +12,6 @@ for all required devices. A TCA9548A allows multiple downstream devices to
 share one hardware I2C bus while remaining independently addressable by mux
 channel.
 
-The mux implementation is kept independent of reader-specific code. PN532
-support is integrated by the Happy-Hare-RFID-Reader project, which uses this
-repository's mux and I2C infrastructure from its own PN532 adapter.
-
 Each AHT initialization or measurement selects its channel only for the
 duration of that complete operation, then disables all TCA9548A channels. This
 keeps an idle or disconnected downstream branch isolated from the shared
