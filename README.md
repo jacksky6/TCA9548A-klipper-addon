@@ -49,9 +49,9 @@ cd TCA9548A-klipper-addon
 ./install.sh
 ```
 
-The installer displays the current Git branch, attempts a fast-forward Git
-update when the directory is a Git checkout, detects Klipper or Kalico, then
-creates these symbolic links in its extras directory:
+The installer displays the current Git branch, checks that branch's upstream
+for updates with a 10-second timeout, and asks before updating. It then detects
+Klipper or Kalico and creates these symbolic links in its extras directory:
 
 ```text
 tca9548a.py
@@ -65,6 +65,10 @@ driver directories automatically.
 
 It does not restart Klipper or Kalico; use Fluidd/Mainsail's Restart Klipper
 action after installation.
+
+Use `-s` or `--skip-update` to skip the remote update check and install from
+the current local files. In a non-interactive run, an available update is
+reported but not installed; the installer continues with local files.
 
 ### AHT I2C Recovery Check
 

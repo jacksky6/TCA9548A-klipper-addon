@@ -9,8 +9,10 @@ FIRMWARE_VERSION=""
 TARGET_DIR=""
 UNINSTALL=0
 ALLOW_LEGACY_I2C=0
+SKIP_UPDATE=0
 I2C_RECOVERY_SUPPORTED=0
 I2C_RECOVERY_MIN_VERSION="v0.13.0-525-g8965958"
+UPDATE_CHECK_TIMEOUT_SECONDS=10
 
 COLOR_ENABLED=0
 COLOR_RESET=""
@@ -70,8 +72,9 @@ print_recovery_notice() {
 }
 
 usage() {
-    echo "Usage: $0 [--firmware-dir PATH] [--allow-legacy-i2c] [-u|--uninstall]"
+    echo "Usage: $0 [--firmware-dir PATH] [--allow-legacy-i2c] [-s|--skip-update] [-u|--uninstall]"
     echo "Install or uninstall TCA9548A symbolic links in Klipper or Kalico extras."
+    echo "-s, --skip-update skips the remote update check and uses local files."
     echo "--allow-legacy-i2c installs without an interactive confirmation when"
     echo "the target does not support recoverable I2C status responses."
 }
@@ -92,6 +95,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-legacy-i2c)
             ALLOW_LEGACY_I2C=1
+            shift
+            ;;
+        -s|--skip-update)
+            SKIP_UPDATE=1
             shift
             ;;
         --help)
@@ -167,6 +174,85 @@ detect_i2c_recovery_support() {
     fi
 }
 
+check_repository_update() {
+    local upstream remote_name remote_branch fetch_output fetch_status
+    local revision_counts ahead behind answer pull_output
+
+    if [[ "${SKIP_UPDATE}" -eq 1 ]]; then
+        print_field "Update check" "skipped (-s)"
+        return
+    fi
+
+    if [[ -z "${BRANCH}" || "${BRANCH}" == detached* ]]; then
+        print_status "${COLOR_WARN}" "Update check" "skipped (detached HEAD)"
+        return
+    fi
+
+    upstream="$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref \
+        --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+    if [[ -z "${upstream}" || "${upstream}" != */* ]]; then
+        print_status "${COLOR_WARN}" "Update check" "skipped (no upstream branch)"
+        return
+    fi
+    remote_name="${upstream%%/*}"
+    remote_branch="${upstream#*/}"
+
+    print_field "Update check" "${upstream} (10s timeout)"
+    if ! command -v timeout >/dev/null 2>&1; then
+        print_status "${COLOR_WARN}" "Update" "check unavailable; using local files"
+        return
+    fi
+    fetch_output="$(GIT_TERMINAL_PROMPT=0 timeout --foreground \
+        "${UPDATE_CHECK_TIMEOUT_SECONDS}s" \
+        git -C "${SCRIPT_DIR}" fetch --quiet --no-tags "${remote_name}" \
+        "${remote_branch}" 2>&1)"
+    fetch_status=$?
+    if [[ "${fetch_status}" -ne 0 ]]; then
+        if [[ "${fetch_status}" -eq 124 ]]; then
+            print_status "${COLOR_WARN}" "Update" "check timed out; using local files"
+        else
+            print_status "${COLOR_WARN}" "Update" "check failed; using local files"
+        fi
+        return
+    fi
+
+    revision_counts="$(git -C "${SCRIPT_DIR}" rev-list --left-right \
+        --count HEAD...FETCH_HEAD 2>/dev/null || true)"
+    read -r ahead behind <<< "${revision_counts}"
+    if [[ ! "${ahead}" =~ ^[0-9]+$ || ! "${behind}" =~ ^[0-9]+$ ]]; then
+        print_status "${COLOR_WARN}" "Update" "check failed; using local files"
+        return
+    fi
+    if [[ "${behind}" -eq 0 ]]; then
+        print_status "${COLOR_OK}" "Update" "current"
+        return
+    fi
+
+    print_status "${COLOR_WARN}" "Update" "available (${behind} commits)"
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        print_status "${COLOR_WARN}" "Update" "skipped (non-interactive)"
+        return
+    fi
+    if ! read -r -p "Update now? [Y/n] " answer; then
+        answer="n"
+    fi
+    case "${answer}" in
+        ""|[yY]|[yY][eE][sS])
+            print_field "Update" "in progress"
+            pull_output="$(GIT_TERMINAL_PROMPT=0 git -C "${SCRIPT_DIR}" \
+                pull --ff-only 2>&1)"
+            if [[ "$?" -eq 0 ]]; then
+                print_status "${COLOR_OK}" "Update" "completed"
+            else
+                print_status "${COLOR_ERROR}" "Update" "failed; using local files"
+            fi
+            ;;
+        *)
+            print_field "Update" "skipped by user"
+            ;;
+    esac
+}
+
 display_firmware_summary() {
     print_section "Klipper Detection"
     print_field "Firmware" "${FIRMWARE_NAME}"
@@ -227,19 +313,9 @@ if [[ "${UNINSTALL}" -eq 0 ]]; then
     print_field "Branch" "${BRANCH}"
 
     if git -C "${SCRIPT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        update_output="$(git -C "${SCRIPT_DIR}" pull --ff-only 2>&1)"
-        if [[ "${?}" -eq 0 ]]; then
-            if printf '%s' "${update_output}" | grep -Fq "Already up to date."; then
-                print_field "Update" "current"
-            else
-                print_field "Update" "updated"
-            fi
-        else
-            echo "Repository update failed; continuing with the local files." >&2
-            printf '%s\n' "${update_output}" >&2
-        fi
+        check_repository_update
     else
-        print_field "Update" "skipped (not a Git checkout)"
+        print_field "Update check" "skipped (not a Git checkout)"
     fi
 fi
 

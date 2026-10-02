@@ -11,6 +11,16 @@ cat > "${TEMPORARY_DIRECTORY}/bin/git" <<'EOF'
 case " $* " in
     *" branch --show-current "*) echo dev ;;
     *" rev-parse --is-inside-work-tree "*) echo true ;;
+    *" rev-parse --abbrev-ref --symbolic-full-name @{upstream} "*) echo origin/dev ;;
+    *" fetch "*) ;;
+    *" rev-list --left-right --count HEAD...FETCH_HEAD "*)
+        if [[ "${MOCK_UPDATE_AVAILABLE:-0}" == 1 ]]; then
+            echo "0 2"
+        else
+            echo "0 0"
+        fi
+        ;;
+    *" pull --ff-only "*) echo "Fast-forward" ;;
     *"/modern"*" describe "*) echo v0.13.0-772-gtest ;;
     *"/legacy"*" describe "*) echo v0.13.0-464-gtest ;;
 esac
@@ -61,6 +71,23 @@ grep -Fq 'Current version:         v0.13.0-772-gtest' \
     "${TEMPORARY_DIRECTORY}/modern.log"
 grep -Fq 'Minimum version:         >= v0.13.0-525-g8965958' \
     "${TEMPORARY_DIRECTORY}/modern.log"
+grep -Eq '^Update:[[:space:]]+current$' "${TEMPORARY_DIRECTORY}/modern.log"
+
+MOCK_UPDATE_AVAILABLE=1 PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
+    bash "${REPOSITORY}/install.sh" \
+    --firmware-dir "${TEMPORARY_DIRECTORY}/modern" \
+    > "${TEMPORARY_DIRECTORY}/update-available.log" 2>&1
+grep -Eq '^Update:[[:space:]]+available \(2 commits\)$' \
+    "${TEMPORARY_DIRECTORY}/update-available.log"
+grep -Eq '^Update:[[:space:]]+skipped \(non-interactive\)$' \
+    "${TEMPORARY_DIRECTORY}/update-available.log"
+
+PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
+    bash "${REPOSITORY}/install.sh" \
+    --firmware-dir "${TEMPORARY_DIRECTORY}/modern" --skip-update \
+    > "${TEMPORARY_DIRECTORY}/skip-update.log"
+grep -Fq 'Update check:           skipped (-s)' \
+    "${TEMPORARY_DIRECTORY}/skip-update.log"
 create_firmware legacy 0
 if PATH="${TEMPORARY_DIRECTORY}/bin:${PATH}" \
     bash "${REPOSITORY}/install.sh" \
