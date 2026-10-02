@@ -51,6 +51,8 @@ Set `reset_pin` in the mux section to let the add-on reset the TCA9548A without
 using I2C. `reset_active_high` describes the **MCU GPIO level that requests a
 reset**. Do not use Klipper's `!` pin inversion prefix with `reset_pin`; the
 add-on rejects it so the configuration has one unambiguous polarity setting.
+When `reset_pin` is set and this option is omitted, it defaults to `True` for
+the board's N-MOS pull-down reset circuit.
 
 | Hardware connection | `reset_active_high` | Normal MCU output | Reset MCU output |
 | --- | --- | --- | --- |
@@ -64,7 +66,8 @@ GND. This lets the 5V pull-up produce a valid high level while the MCU only
 drives the MOS gate. A 3.3V push-pull GPIO connected directly to a 5V
 `RESET#` cannot release the pin to 5V and is not recommended.
 
-Example for the N-MOS arrangement shown above:
+Default board configuration for the N-MOS arrangement shown above. Remove the
+comment marker from both reset lines to enable the hardware reset:
 
 ```ini
 [tca9548a mux1]
@@ -73,8 +76,9 @@ i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
 environment_report_time: 30
 
-reset_pin: EMU_1:PC12
-reset_active_high: True
+# reset_pin: EMU_1:PC12
+# reset_active_high: True
+# Board N-MOS circuit: PC12 high pulls TCA RST low; PC12 low runs normally.
 # reset_pulse_time: 0.010          # default: 10 ms
 # reset_settle_time: 0.010         # default: 10 ms
 # reset_recovery_cooldown: 30      # default: 30 s
@@ -267,13 +271,14 @@ settings, channel numbers, I2C addresses, and temperature limits accordingly.
 
 ```ini
 [tca9548a mux1]
-i2c_mcu: mmu
-i2c_bus: i2c2_PB10_PB11
+i2c_mcu: EMU_1
+i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 environment_report_time: 30
-# Optional TCA RESET# control. See "Optional Hardware Reset" above.
-# reset_pin: mmu:PC12
+# Optional TCA RST control. See "Optional Hardware Reset" above.
+# reset_pin: EMU_1:PC12
 # reset_active_high: True
+# Board N-MOS circuit: PC12 high pulls TCA RST low; PC12 low runs normally.
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
@@ -340,7 +345,7 @@ Use the Klipper MCU name and I2C bus name for your board in `i2c_mcu` and
 `i2c_bus` on the `[tca9548a mux1]` section. That section is the sole source
 of `i2c_mcu`, `i2c_bus`, `i2c_speed`, and software-I2C pins for every device
 behind the mux. Any of those options in a downstream sensor section are
-ignored. The example uses `mmu` and `i2c2_PB10_PB11`.
+ignored. The example uses `EMU_1` and `i2c1_PB6_PB7`.
 
 `environment_report_time` sets the polling interval, in seconds, for
 environment sensors on that mux. It defaults to `30`. TCA9548A AHT sensor

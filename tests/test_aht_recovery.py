@@ -368,7 +368,7 @@ class FakeTcaConfig:
         return "tca9548a mux0"
 
     def get(self, option, default=None):
-        defaults = {"i2c_mcu": "mcu", "i2c_bus": "i2c1_PB6_PB7"}
+        defaults = {"i2c_mcu": "EMU_1", "i2c_bus": "i2c1_PB6_PB7"}
         return self.options.get(option, defaults.get(option, default))
 
     def getint(self, option, default=None, minval=None, maxval=None):
@@ -527,7 +527,7 @@ class TcaResetTests(unittest.TestCase):
             "TCA9548A 'mux0': reset_pin is not configured",
         ])
 
-    def test_reset_pin_setup_uses_release_value_for_start_and_shutdown(self):
+    def test_reset_pin_defaults_to_active_high_for_start_and_shutdown(self):
         raw_i2c = FakeModernI2C([])
         self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
         gcode = FakeTcaGCode()
@@ -535,12 +535,12 @@ class TcaResetTests(unittest.TestCase):
         printer = FakeTcaPrinter(self.reactor, pins, gcode)
         config = FakeTcaConfig(printer, {
             "reset_pin": "EMU_1:PC12",
-            "reset_active_high": True,
         })
 
         mux = self.core.TCA9548A(config)
 
         self.assertIs(mux.reset_pin, self.reset_pin)
+        self.assertTrue(mux.reset_active_high)
         self.assertEqual(pins.requests, [("digital_out", "EMU_1:PC12")])
         self.assertEqual(self.reset_pin.max_duration, 0.)
         self.assertEqual(self.reset_pin.start_values, (False, False))

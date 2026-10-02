@@ -7,13 +7,14 @@ tca9548a_drivers package.
 Typical temperature-sensor configuration::
 
     [tca9548a mux0]
-    i2c_mcu: mcu
+    i2c_mcu: EMU_1
     i2c_bus: i2c1_PB6_PB7
     i2c_address: 112              # 0x70
     environment_report_time: 30
     # Optional hardware reset control:
     # reset_pin: EMU_1:PC12
     # reset_active_high: True      # True for an N-MOS pull-down circuit
+    # Board N-MOS circuit: PC12 high pulls TCA RST low; PC12 low runs normally.
 
     [temperature_sensor chamber]
     sensor_type: AHT2X_TCA9548A
@@ -184,7 +185,7 @@ class TCA9548A:
         self.environment_report_time = config.getint(
             "environment_report_time", 30, minval=5)
         self.reset_pin = None
-        self.reset_active_high = False
+        self.reset_active_high = True
         self.reset_pulse_time = DEFAULT_RESET_PULSE_TIME
         self.reset_settle_time = DEFAULT_RESET_SETTLE_TIME
         self.reset_recovery_cooldown = DEFAULT_RESET_RECOVERY_COOLDOWN
@@ -206,7 +207,7 @@ class TCA9548A:
                     "reset_pin must not use '!'; set reset_active_high "
                     "instead")
             self.reset_active_high = config.getboolean(
-                "reset_active_high", False)
+                "reset_active_high", True)
             self.reset_pulse_time = config.getfloat(
                 "reset_pulse_time", DEFAULT_RESET_PULSE_TIME, above=0.)
             self.reset_settle_time = config.getfloat(
