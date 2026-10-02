@@ -55,6 +55,8 @@ class SHT3XTCA9548A(EnvironmentRecoveryMixin, sht3x.SHT3X):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        if self._sampling_stopped():
+            return
         with self._mux.session(close_on_exit=True):
             if self._initialize_sensor():
                 self._sample_initialized(self.reactor.monotonic())
@@ -75,6 +77,8 @@ class SHT3XTCA9548A(EnvironmentRecoveryMixin, sht3x.SHT3X):
         self._initialized = False
 
     def _sample_sht3x(self, eventtime):
+        if self._sampling_stopped():
+            return self.reactor.NEVER
         if self._mux.is_busy():
             return eventtime + self.report_time
         with self._mux.session(close_on_exit=True):

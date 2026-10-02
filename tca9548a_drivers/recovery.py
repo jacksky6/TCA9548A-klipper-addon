@@ -4,8 +4,8 @@ import logging
 
 
 LOG_FAILURE_NOTICE_INTERVAL = 10
-WEB_FAILURE_NOTICE_INTERVAL = 120
 WEB_CONSOLE_READY_DELAY = 1.
+MAX_CONSECUTIVE_ENVIRONMENT_FAILURES = 15
 
 RECOVERY_STATUS_FIELDS = (
     "valid",
@@ -15,6 +15,8 @@ RECOVERY_STATUS_FIELDS = (
     "last_success_time",
     "i2c_error_count",
     "error_count",
+    "consecutive_failure_count",
+    "sampling_stopped",
     "i2c_status_supported",
 )
 
@@ -37,10 +39,10 @@ class EnvironmentRecoveryMixin:
         self.last_success_time = None
         self.i2c_error_count = 0
         self.error_count = 0
+        self.consecutive_failure_count = 0
         self._last_log_error_key = None
         self._suppressed_log_errors = 0
         self._last_web_error_key = None
-        self._suppressed_web_errors = 0
         self._klippy_ready = False
         self._pending_web_notification = None
         self._status_patched = False
@@ -56,10 +58,13 @@ class EnvironmentRecoveryMixin:
                 self.reactor.monotonic() + WEB_CONSOLE_READY_DELAY)
 
     def _record_failure(self, stage, error):
+        if self._sampling_stopped():
+            return
         now = self.reactor.monotonic()
         self.valid = False
         self.communication_ok = False
         self.error_count += 1
+        self.consecutive_failure_count += 1
         self._on_environment_failure()
         details = {
             "stage": stage,
@@ -95,6 +100,26 @@ class EnvironmentRecoveryMixin:
                 self._suppressed_log_errors = 0
 
         self._record_web_failure(key, stage, details)
+        if self._sampling_stopped():
+            self._report_sampling_stopped(details)
+
+    def _sampling_stopped(self):
+        return (self.consecutive_failure_count >=
+                MAX_CONSECUTIVE_ENVIRONMENT_FAILURES)
+
+    def _report_sampling_stopped(self, details):
+        reason = details.get("i2c_bus_status", details["message"])
+        message = (
+            "%s: sampling stopped after %d failures (%s). Check wiring "
+            "and sensor; restart Klipper after repair." % (
+                self._recovery_display_name(),
+                MAX_CONSECUTIVE_ENVIRONMENT_FAILURES, reason))
+        logging.error(message)
+        if self._klippy_ready:
+            self._respond_error(message)
+            return
+        self._pending_web_notification = (("sampling_stopped", reason),
+                                          message)
 
     def _on_environment_failure(self):
         """Let a concrete driver invalidate its initialization state."""
@@ -115,7 +140,6 @@ class EnvironmentRecoveryMixin:
             self._recovery_display_name(), stage, error_name,
             self.report_time)
         if key != self._last_web_error_key:
-            self._suppressed_web_errors = 0
             if not self._klippy_ready:
                 # Moonraker subscribes to G-code output after klippy:connect.
                 # Retain startup failures until the Console can receive them.
@@ -125,14 +149,6 @@ class EnvironmentRecoveryMixin:
             else:
                 self._respond_error(message)
                 self._last_web_error_key = key
-        else:
-            self._suppressed_web_errors += 1
-            if self._suppressed_web_errors >= WEB_FAILURE_NOTICE_INTERVAL:
-                self._respond_error(
-                    "%s: %s still failing: %s (%d attempts)" % (
-                        self._recovery_display_name(), stage, error_name,
-                        self._suppressed_web_errors))
-                self._suppressed_web_errors = 0
 
     def _emit_pending_web_notification(self, eventtime):
         pending = self._pending_web_notification
@@ -144,6 +160,8 @@ class EnvironmentRecoveryMixin:
         return self.reactor.NEVER
 
     def _record_success(self):
+        if self._sampling_stopped():
+            return
         was_unavailable = not self.communication_ok
         web_failure_reported = self._last_web_error_key is not None
         if was_unavailable and (self.last_success_time is not None
@@ -156,10 +174,10 @@ class EnvironmentRecoveryMixin:
         self.valid = True
         self.communication_ok = True
         self.last_success_time = self.reactor.monotonic()
+        self.consecutive_failure_count = 0
         self._last_log_error_key = None
         self._suppressed_log_errors = 0
         self._last_web_error_key = None
-        self._suppressed_web_errors = 0
         self._pending_web_notification = None
 
     def _publish_temperature(self, measured_time=None):
@@ -230,6 +248,8 @@ class EnvironmentRecoveryMixin:
             "last_success_time": self.last_success_time,
             "i2c_error_count": self.i2c_error_count,
             "error_count": self.error_count,
+            "consecutive_failure_count": self.consecutive_failure_count,
+            "sampling_stopped": self._sampling_stopped(),
             "i2c_status_supported": getattr(
                 self.i2c, "status_supported", False),
             "tca9548a_channel": self._mux_channel,

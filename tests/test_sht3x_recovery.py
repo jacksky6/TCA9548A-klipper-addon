@@ -366,6 +366,12 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.assertEqual(sensor.last_error["type"], "ValueError")
         self.assertEqual(published, [(0., 23.)])
 
+    def test_stopped_sensor_does_not_schedule_another_sample(self):
+        sensor, _ = self._make_sensor([])
+        sensor.consecutive_failure_count = 15
+
+        self.assertEqual(sensor._sample_sht3x(0.), self.reactor.NEVER)
+
     def test_driver_rejects_sensor_level_error_value_option(self):
         config = FakeConfig(self.printer, {"zero_temperature_on_error": True})
 

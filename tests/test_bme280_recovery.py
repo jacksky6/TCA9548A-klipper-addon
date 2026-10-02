@@ -359,7 +359,15 @@ class BME280RecoveryTests(unittest.TestCase):
 
         self.assertEqual(status["temperature"], 24.)
         self.assertEqual(status["humidity"], 45.)
+        self.assertEqual(status["consecutive_failure_count"], 0)
+        self.assertFalse(status["sampling_stopped"])
         self.assertNotIn("pressure", status)
+
+    def test_stopped_sensor_does_not_schedule_another_sample(self):
+        sensor, _ = self._make_sensor([])
+        sensor.consecutive_failure_count = 15
+
+        self.assertEqual(sensor._sample_bme280(0.), self.reactor.NEVER)
 
     def test_initialization_failure_retries_without_shutdown(self):
         sensor, published = self._make_sensor([

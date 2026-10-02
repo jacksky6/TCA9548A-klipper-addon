@@ -779,6 +779,7 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(sensor.temp, valid_temperature)
         self.assertEqual(sensor.humidity, valid_humidity)
         self.assertEqual(sensor.i2c_error_count, 1)
+        self.assertEqual(sensor.consecutive_failure_count, 1)
         self.assertEqual(sensor.last_error["i2c_bus_status"], "NACK")
         self.assertEqual(self.printer.shutdowns, [])
 
@@ -787,6 +788,7 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertTrue(sensor.valid)
         self.assertTrue(sensor.communication_ok)
         self.assertTrue(sensor.init_sent)
+        self.assertEqual(sensor.consecutive_failure_count, 0)
         self.assertGreater(next_waketime, retry_at)
         self.assertEqual(self.printer.shutdowns, [])
 
@@ -877,7 +879,7 @@ class AHTRecoveryTests(unittest.TestCase):
 
         self.assertEqual(self.mux.session_close_on_exit, [True])
 
-    def test_web_console_reports_failure_summary_and_recovery(self):
+    def test_fifteen_failures_stop_sensor_sampling(self):
         raw_i2c = FakeModernI2C([])
         self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
         sensor = self.aht.AHT2x(self.config)
@@ -885,30 +887,29 @@ class AHTRecoveryTests(unittest.TestCase):
         error = self.core.I2CStatusError(raw_i2c, "START_NACK", "write",
                                          3, 0)
 
-        sensor._record_failure("measurement", error)
+        with mock.patch.object(self.aht.logging, "error") as logged_error:
+            for ignored in range(15):
+                sensor._record_failure("measurement", error)
+
+        logged_error.assert_called_once_with(
+            "TCA9548A AHT chamber: sampling stopped after 15 failures "
+            "(START_NACK). Check wiring and sensor; restart Klipper after "
+            "repair.")
         self.assertEqual(self.printer.gcode.raw_responses, [
             "!! TCA9548A AHT chamber: measurement failed: START_NACK; "
             "retry in 60s",
+            "!! TCA9548A AHT chamber: sampling stopped after 15 failures "
+            "(START_NACK). Check wiring and sensor; restart Klipper after "
+            "repair.",
         ])
-        self.assertEqual(self.printer.gcode.responses, [])
+        self.assertEqual(sensor.consecutive_failure_count, 15)
+        self.assertTrue(sensor._sampling_stopped())
+        self.assertEqual(sensor._sample_aht(900.), self.reactor.NEVER)
+        self.assertEqual(self.mux.session_close_on_exit, [])
 
-        for _ in range(119):
-            sensor._record_failure("measurement", error)
-        self.assertEqual(len(self.printer.gcode.raw_responses), 1)
-
-        sensor._record_failure("measurement", error)
-        self.assertEqual(self.printer.gcode.raw_responses[-1],
-                         "!! TCA9548A AHT chamber: measurement still "
-                         "failing: START_NACK (120 attempts)")
-        self.assertEqual(len(self.printer.gcode.raw_responses), 2)
-
-        self.assertIsNone(sensor.last_success_time)
         sensor._record_success()
-        self.assertEqual(self.printer.gcode.responses[-1],
-                         "TCA9548A AHT chamber: recovered")
-        self.assertEqual(len(self.printer.gcode.responses), 1)
-        self.assertIsNone(sensor._last_web_error_key)
-        self.assertEqual(sensor._suppressed_web_errors, 0)
+        self.assertEqual(sensor.consecutive_failure_count, 15)
+        self.assertEqual(self.printer.gcode.responses, [])
 
     def test_startup_failure_is_reported_after_klippy_ready(self):
         raw_i2c = FakeModernI2C([])

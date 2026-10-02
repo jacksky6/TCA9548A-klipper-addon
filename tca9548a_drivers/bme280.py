@@ -64,6 +64,8 @@ class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        if self._sampling_stopped():
+            return
         with self._mux.session(close_on_exit=True):
             if self._initialize_sensor():
                 self._sample_initialized(self.reactor.monotonic())
@@ -99,6 +101,8 @@ class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
         return self._report_time
 
     def _sample_bme280(self, eventtime):
+        if self._sampling_stopped():
+            return self.reactor.NEVER
         if self._mux.is_busy():
             return eventtime + self._report_time
         with self._mux.session(close_on_exit=True):

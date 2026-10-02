@@ -78,6 +78,8 @@ class AHTBase(EnvironmentRecoveryMixin):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        if self._sampling_stopped():
+            return
         if self._debug_skip_init:
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)
@@ -161,6 +163,8 @@ class AHTBase(EnvironmentRecoveryMixin):
             return False
 
     def _sample_aht(self, eventtime):
+        if self._sampling_stopped():
+            return self.reactor.NEVER
         if self._mux.is_busy():
             return eventtime + self.report_time
         with self._mux.session(close_on_exit=True):
