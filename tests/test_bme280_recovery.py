@@ -221,6 +221,7 @@ def _load_driver_modules():
             self.i2c = bus.MCU_I2C_from_config(config, default_addr=0x76,
                                                 default_speed=100000)
             self.mcu = self.i2c.get_mcu()
+            self.os_pres = config.getint("bme280_oversample_pressure", 2)
             self.temp = self.humidity = self.pressure = 0.
             self.min_temp = self.max_temp = 0.
             self._callback = None
@@ -230,24 +231,28 @@ def _load_driver_modules():
                                                 self.handle_connect)
 
         def _init_bmxx80(self):
+            self.initialized_pressure_oversample = self.os_pres
             self.i2c.i2c_write([0xE0, 0xB6])
             self.sample_timer = self.reactor.register_timer(
                 self._sample_bme280)
 
+        def read_register(self, register, read_len):
+            if register != "TEMP_MSB":
+                raise AssertionError("unexpected register: %s" % (register,))
+            params = self.i2c.i2c_read([0xFA], read_len)
+            return bytearray(params["response"])
+
+        def _compensate_temp(self, raw_temp):
+            return 24.
+
+        def _compensate_humidity_bme280(self, raw_humidity):
+            return 45.
+
+        def _compensate_pressure_bme280(self, raw_pressure):
+            raise AssertionError("pressure compensation must not be called")
+
         def _sample_bme280(self, eventtime):
-            try:
-                params = self.i2c.i2c_read([0xF7], 8)
-            except Exception:
-                self.temp = self.humidity = self.pressure = 0.
-                return self.reactor.NEVER
-            if params["response"] == [255]:
-                raise ValueError("malformed measurement")
-            self.temp = 24.
-            self.humidity = 45.
-            self.pressure = 1005.
-            self._callback(self.mcu.estimated_print_time(
-                self.reactor.monotonic()), self.temp)
-            return eventtime + .8
+            raise AssertionError("native BME280 sampling must not be called")
 
         def setup_minmax(self, min_temp, max_temp):
             self.min_temp = min_temp
@@ -292,19 +297,19 @@ class BME280RecoveryTests(unittest.TestCase):
             lambda print_time, temp: published.append((print_time, temp)))
         return sensor, published
 
-    def test_failed_sample_retries_and_preserves_internal_values(self):
+    def test_failed_sample_retries_without_pressure_compensation(self):
         sensor, published = self._make_sensor([
             success(),  # initialization
-            success([0] * 8),  # initial sample
+            success([0] * 5),  # initial sample
             {"i2c_bus_status": "START_NACK", "response": []},
             success(),  # retry initialization
-            success([0] * 8),  # retry sample
+            success([0] * 5),  # retry sample
         ])
         sensor.handle_connect()
         sensor.handle_ready()
         self.assertTrue(sensor.valid)
-        self.assertEqual((sensor.temp, sensor.humidity, sensor.pressure),
-                         (24., 45., 1005.))
+        self.assertEqual((sensor.temp, sensor.humidity), (24., 45.))
+        self.assertEqual(sensor.initialized_pressure_oversample, 0)
 
         self.reactor.now = 100.
         retry_at = sensor._sample_bme280(100.)
@@ -312,8 +317,7 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertEqual(retry_at, 160.)
         self.assertFalse(sensor.valid)
         self.assertFalse(sensor.communication_ok)
-        self.assertEqual((sensor.temp, sensor.humidity, sensor.pressure),
-                         (24., 45., 1005.))
+        self.assertEqual((sensor.temp, sensor.humidity), (24., 45.))
         self.assertEqual(sensor.last_error["i2c_bus_status"], "START_NACK")
         self.assertEqual(self.printer.gcode.raw_responses, [
             "!! TCA9548A BME280 chamber: measurement failed: START_NACK; "
@@ -333,7 +337,7 @@ class BME280RecoveryTests(unittest.TestCase):
         self.mux.zero_humidity_on_error = False
         sensor, published = self._make_sensor([
             success(),
-            success([0] * 8),
+            success([0] * 5),
             {"i2c_bus_status": "NACK", "response": []},
         ])
         sensor.handle_connect()
@@ -341,14 +345,13 @@ class BME280RecoveryTests(unittest.TestCase):
         self.reactor.now = 20.
         sensor._sample_bme280(20.)
 
-        self.assertEqual((sensor.temp, sensor.humidity, sensor.pressure),
-                         (0., 45., 1005.))
+        self.assertEqual((sensor.temp, sensor.humidity), (0., 45.))
         self.assertEqual(published, [(0., 24.), (20., 0.)])
 
-    def test_status_hides_pressure_to_match_aht(self):
+    def test_status_matches_aht_without_pressure(self):
         sensor, _ = self._make_sensor([
             success(),
-            success([0] * 8),
+            success([0] * 5),
         ])
         sensor.handle_connect()
 
@@ -362,7 +365,7 @@ class BME280RecoveryTests(unittest.TestCase):
         sensor, published = self._make_sensor([
             {"i2c_bus_status": "NACK", "response": []},
             success(),
-            success([0] * 8),
+            success([0] * 5),
         ])
 
         sensor.handle_connect()
@@ -379,7 +382,7 @@ class BME280RecoveryTests(unittest.TestCase):
     def test_malformed_sample_retries_without_losing_valid_values(self):
         sensor, published = self._make_sensor([
             success(),
-            success([0] * 8),
+            success([0] * 5),
             success([255]),
         ])
         sensor.handle_connect()
@@ -388,9 +391,8 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertEqual(sensor._sample_bme280(20.), 80.)
 
         self.assertFalse(sensor.valid)
-        self.assertEqual((sensor.temp, sensor.humidity, sensor.pressure),
-                         (24., 45., 1005.))
-        self.assertEqual(sensor.last_error["type"], "ValueError")
+        self.assertEqual((sensor.temp, sensor.humidity), (24., 45.))
+        self.assertEqual(sensor.last_error["type"], "BME280MeasurementError")
         self.assertEqual(published, [(0., 24.)])
 
     def test_driver_rejects_sensor_level_error_value_option(self):

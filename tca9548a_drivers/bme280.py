@@ -7,7 +7,7 @@ from .recovery import EnvironmentRecoveryMixin
 
 
 class BME280MeasurementError(Exception):
-    """The installed BME280 driver stopped a sample without an I2C error."""
+    """The BME280 returned an incomplete or unusable measurement."""
 
 
 class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
@@ -43,6 +43,10 @@ class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
         super(BME280TCA9548A, self).__init__(
             tca9548a.MuxedSensorConfig(config, mux_config))
 
+        # This adapter is intentionally temperature/humidity-only. Disable
+        # the BME280 pressure conversion before native initialization writes
+        # the sensor's CTRL_MEAS register.
+        self.os_pres = 0
         self._mux = mux
         self._report_time = mux.environment_report_time
         self.report_time = self._report_time
@@ -106,31 +110,37 @@ class BME280TCA9548A(EnvironmentRecoveryMixin, bme280.BME280):
         return self.reactor.monotonic() + self._report_time
 
     def _sample_initialized(self, eventtime):
-        previous_values = (self.temp, self.humidity, self.pressure)
+        previous_values = (self.temp, self.humidity)
         self.i2c.clear_error()
         try:
-            result = super(BME280TCA9548A, self)._sample_bme280(eventtime)
+            # Temperature and humidity are contiguous from TEMP_MSB. Do not
+            # read the preceding pressure registers.
+            data = self.read_register("TEMP_MSB", 5)
+            if data is None or len(data) != 5:
+                raise BME280MeasurementError(
+                    "expected 5 measurement bytes, received %d" % (
+                        0 if data is None else len(data),))
+            temp_raw = (data[0] << 12) | (data[1] << 4) | (data[2] >> 4)
+            humid_raw = (data[3] << 8) | data[4]
+            self.temp = self._compensate_temp(temp_raw)
+            self.humidity = self._compensate_humidity_bme280(humid_raw)
         except Exception as exc:
-            self.temp, self.humidity, self.pressure = previous_values
+            self.temp, self.humidity = previous_values
             self._record_failure("measurement", exc)
             return False
-        if result == self.reactor.NEVER:
-            # The native driver clears values before returning NEVER. Restore
-            # them so the shared mux-level error policy can choose per value.
-            self.temp, self.humidity, self.pressure = previous_values
-            error = self.i2c.last_error or BME280MeasurementError(
-                "measurement did not complete")
-            self._record_failure("measurement", error)
-            return False
+        if self.temp < self.min_temp or self.temp > self.max_temp:
+            self.printer.invoke_shutdown(
+                "BME280 temperature %0.1f outside range of %0.1f:%.01f" % (
+                    self.temp, self.min_temp, self.max_temp))
+        self._publish_temperature()
         self._record_success()
         return True
 
     def get_status(self, eventtime):
-        status = super(BME280TCA9548A, self).get_status(eventtime)
-        # Keep the public BME280_TCA9548A data shape aligned with AHT.
-        # Klipper's BME280 implementation still calculates pressure internally
-        # as part of its normal measurement flow.
-        status.pop("pressure", None)
+        status = {
+            "temperature": round(self.temp, 2),
+            "humidity": self.humidity,
+        }
         status.update(self._get_environment_recovery_status())
         return status
 
