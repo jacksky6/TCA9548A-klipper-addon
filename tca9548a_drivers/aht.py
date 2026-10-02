@@ -16,6 +16,7 @@ STATUS_CALIBRATED = 0x08
 MAX_BUSY_CYCLES = 5
 LOG_FAILURE_NOTICE_INTERVAL = 10
 WEB_FAILURE_NOTICE_INTERVAL = 120
+WEB_CONSOLE_READY_DELAY = 1.
 
 
 class AHTMeasurementError(Exception):
@@ -54,6 +55,8 @@ class AHTBase:
         self.report_time = self._mux.environment_report_time
         self.temp = self.min_temp = self.max_temp = self.humidity = 0.
         self.sample_timer = self.reactor.register_timer(self._sample_aht)
+        self._pending_web_notification_timer = self.reactor.register_timer(
+            self._emit_pending_web_notification)
         self.is_calibrated = False
         self.init_sent = False
         self._callback = None
@@ -69,12 +72,15 @@ class AHTBase:
         self._suppressed_log_errors = 0
         self._last_web_error_key = None
         self._suppressed_web_errors = 0
+        self._klippy_ready = False
+        self._pending_web_notification = None
 
         # Preserve Klipper's standard AHT object name for consumers that look
         # up humidity independently of temperature_sensor.
         self.printer.add_object("aht10 " + self.name, self)
         self.printer.register_event_handler("klippy:connect",
                                             self.handle_connect)
+        self.printer.register_event_handler("klippy:ready", self.handle_ready)
         self._mux.register_environment_sensor(self, self._mux_channel)
         logging.info("%s %s: using TCA9548A '%s' channel %d",
                      self.model, self.name, mux_name, self._mux_channel)
@@ -91,6 +97,13 @@ class AHTBase:
             self._publish_sample()
         waketime = self._mux.get_environment_waketime(self)
         self.reactor.update_timer(self.sample_timer, waketime)
+
+    def handle_ready(self):
+        self._klippy_ready = True
+        if self._pending_web_notification is not None:
+            self.reactor.update_timer(
+                self._pending_web_notification_timer,
+                self.reactor.monotonic() + WEB_CONSOLE_READY_DELAY)
 
     def _send_init(self):
         raise NotImplementedError("Subclass must implement _send_init")
@@ -197,13 +210,24 @@ class AHTBase:
                                 self.report_time)
                 self._suppressed_log_errors = 0
 
+        self._record_web_failure(key, stage, details)
+
+    def _record_web_failure(self, key, stage, details):
+        message = (
+            "TCA9548A AHT %s: I2C communication failed during %s: %s; "
+            "retrying in %ds" % (
+                self.name, stage, details["message"], self.report_time))
         if key != self._last_web_error_key:
-            self._respond_info(
-                "TCA9548A AHT %s: I2C communication failed during %s: "
-                "%s; retrying in %ds" % (
-                    self.name, stage, details["message"], self.report_time))
-            self._last_web_error_key = key
             self._suppressed_web_errors = 0
+            if not self._klippy_ready:
+                # Moonraker subscribes to G-code output after klippy:connect.
+                # Retain startup failures until the Console can receive them.
+                self._pending_web_notification = (key, message)
+            elif self._pending_web_notification is not None:
+                self._pending_web_notification = (key, message)
+            else:
+                self._respond_info(message)
+                self._last_web_error_key = key
         else:
             self._suppressed_web_errors += 1
             if self._suppressed_web_errors >= WEB_FAILURE_NOTICE_INTERVAL:
@@ -213,13 +237,23 @@ class AHTBase:
                         self.name, self._suppressed_web_errors))
                 self._suppressed_web_errors = 0
 
+    def _emit_pending_web_notification(self, eventtime):
+        pending = self._pending_web_notification
+        self._pending_web_notification = None
+        if pending is not None and self.communication_ok is False:
+            key, message = pending
+            self._respond_info(message)
+            self._last_web_error_key = key
+        return self.reactor.NEVER
+
     def _record_success(self):
         if not self.communication_ok and self.last_success_time is not None:
             logging.info("%s %s: I2C communication recovered",
                          self.model, self.name)
-            self._respond_info(
-                "TCA9548A AHT %s: I2C communication recovered" % (
-                    self.name,))
+            if self._last_web_error_key is not None:
+                self._respond_info(
+                    "TCA9548A AHT %s: I2C communication recovered" % (
+                        self.name,))
         self.valid = True
         self.communication_ok = True
         self.last_success_time = self.reactor.monotonic()
@@ -227,6 +261,7 @@ class AHTBase:
         self._suppressed_log_errors = 0
         self._last_web_error_key = None
         self._suppressed_web_errors = 0
+        self._pending_web_notification = None
 
     def _respond_info(self, message):
         try:

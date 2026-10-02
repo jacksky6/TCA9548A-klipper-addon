@@ -324,6 +324,7 @@ class AHTRecoveryTests(unittest.TestCase):
         raw_i2c = FakeModernI2C([])
         self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
         sensor = self.aht.AHT2x(self.config)
+        sensor.handle_ready()
         error = self.core.I2CStatusError(raw_i2c, "START_NACK", "write",
                                          3, 0)
 
@@ -352,6 +353,46 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.printer.gcode.responses), 3)
         self.assertIsNone(sensor._last_web_error_key)
         self.assertEqual(sensor._suppressed_web_errors, 0)
+
+    def test_startup_failure_is_reported_after_klippy_ready(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        error = self.core.I2CStatusError(raw_i2c, "START_NACK", "write",
+                                         3, 0)
+
+        sensor._record_failure("initialization", error)
+        self.assertEqual(self.printer.gcode.responses, [])
+        self.assertIsNotNone(sensor._pending_web_notification)
+
+        sensor.handle_ready()
+        self.assertEqual(self.reactor.updated_timer, (
+            sensor._pending_web_notification_timer, 1.))
+        self.assertEqual(sensor._emit_pending_web_notification(1.),
+                         self.reactor.NEVER)
+        self.assertEqual(self.printer.gcode.responses, [
+            "TCA9548A AHT chamber: I2C communication failed during "
+            "initialization: MCU 'mcu' I2C request to addr 56 reports error "
+            "START_NACK during write; retrying in 30s",
+        ])
+        self.assertEqual(sensor._last_web_error_key, (
+            "initialization", "START_NACK", "I2CStatusError",
+            "MCU 'mcu' I2C request to addr 56 reports error START_NACK "
+            "during write"))
+
+    def test_startup_recovery_cancels_pending_console_failure(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        error = self.aht.AHTMeasurementError("test failure")
+
+        sensor._record_failure("initialization", error)
+        sensor._record_success()
+        sensor.handle_ready()
+        sensor._emit_pending_web_notification(1.)
+
+        self.assertEqual(self.printer.gcode.responses, [])
+        self.assertIsNone(sensor._pending_web_notification)
 
     def test_log_summary_uses_failure_count_and_retry_interval(self):
         raw_i2c = FakeModernI2C([])
