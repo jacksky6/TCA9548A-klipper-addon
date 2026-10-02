@@ -332,11 +332,14 @@ Klipper 启动时，每个复用器会记录环境传感器调度计划。同一
 已安装 Klipper/Kalico 的测量算法，但使用扩展提供的恢复包装与同一可恢复复用器传输层。
 无需修改 Klipper/Kalico 本身。
 
-使用现代主机和匹配 MCU 固件时，任一受支持类型的初始化或采样失败都不会停止其定时器。
-驱动会记录失败、将读数标为无效，并在共享的 `environment_report_time` 后重试完整传感器
-初始化。默认保留最后一次有效的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让
-温度或湿度报告为零。BME280 已关闭气压采样与补偿计算，因此对外展示的温湿度字段与 AHT
-一致。重试成功后读数会重新有效。相同错误在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C
+使用现代主机和匹配 MCU 固件时，任一受支持类型的初始化或采样失败都会记录失败、将读数
+标为无效，并在共享的 `environment_report_time` 后重试完整传感器初始化。重试成功后读数会
+重新有效。若连续 15 次失败，该传感器会在本次 Klipper 进程内停止采样，不再提交 I2C
+访问，也不会影响同一复用器上的其他传感器。控制台和 `klippy.log` 会显示最后一次错误，
+并提示检查接线和传感器；排除故障后需要重启 Klipper 才会恢复采样。默认保留最后一次有效
+的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让温度或湿度报告为零。BME280
+已关闭气压采样与补偿计算，因此对外展示的温湿度字段与 AHT 一致。相同错误在 `klippy.log`
+中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C
 状态和重试间隔，例如 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`，
 并将其作为 Klipper 错误行显示，因而使用前端的错误颜色。测量失败后的后续重试若显示
 `initialization failed`，表示驱动正在再次采样前重新初始化传感器。详细的 MCU、地址、
@@ -349,8 +352,9 @@ Klipper 启动时，每个复用器会记录环境传感器调度计划。同一
 
 每个可恢复环境传感器对象的状态均包括 `valid`、`communication_ok`、`last_error`、
 `last_error_time`、`last_success_time`、`i2c_error_count`、`error_count`、
-`i2c_status_supported` 和 `tca9548a_channel`。温度传感器对象可用时，这些字段也会加入
-关联的 `temperature_sensor` 状态。
+`consecutive_failure_count`、`sampling_stopped`、`i2c_status_supported` 和
+`tca9548a_channel`。温度传感器对象可用时，这些字段也会加入关联的
+`temperature_sensor` 状态。
 
 当前恢复机制只适用于上述 AHT、BME280、SHT3X 类型的 I2C 传输错误与损坏测量数据，
 不改变 PN532 或其他下游设备的错误语义。配置传感器的 `min_temp` 或 `max_temp` 违反

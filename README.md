@@ -398,13 +398,17 @@ but use add-on recovery wrappers and the same recoverable mux transport. No
 Klipper/Kalico source changes are required.
 
 With a modern host and matching MCU firmware, a failed initialization or sample
-from any supported type does not stop its timer. The driver records the
-failure, marks the reading invalid, and retries a full sensor initialization
-after the shared `environment_report_time`. By default it retains the last
-valid temperature and humidity; the two mux-level `zero_*_on_error` options can
-independently report zero for either value. BME280 pressure sampling and
-compensation are disabled, so it presents the same temperature and humidity
-fields as AHT. A successful retry marks the reading valid again.
+from any supported type records the failure, marks the reading invalid, and
+retries a full sensor initialization after the shared
+`environment_report_time`. A successful retry marks the reading valid again.
+After 15 consecutive failures, that sensor stops sampling for the rest of the
+Klipper process. It no longer submits I2C traffic or affects other sensors on
+the mux. The Console and `klippy.log` identify the final error and advise
+checking its wiring and sensor. Repair the fault, then restart Klipper to
+resume sampling. By default a failed sensor retains the last valid temperature
+and humidity; the two mux-level `zero_*_on_error` options can independently
+report zero for either value. BME280 pressure sampling and compensation are
+disabled, so it presents the same temperature and humidity fields as AHT.
 Repeated identical errors are rate-limited in `klippy.log`. The Fluidd/Mainsail
 Console shows failure stage, I2C status, and retry interval, for example
 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`, as
@@ -421,8 +425,9 @@ failure that recovers before it is shown in the Console also remains silent.
 
 Each recoverable environment sensor object's status includes `valid`,
 `communication_ok`, `last_error`, `last_error_time`, `last_success_time`,
-`i2c_error_count`, `error_count`, and `i2c_status_supported`, as well as
-`tca9548a_channel`. The same fields are added to the linked
+`i2c_error_count`, `error_count`, `consecutive_failure_count`,
+`sampling_stopped`, and `i2c_status_supported`, as well as `tca9548a_channel`.
+The same fields are added to the linked
 `temperature_sensor` status when it is available.
 
 This recovery applies only to I2C transport and malformed-measurement errors
