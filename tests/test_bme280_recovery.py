@@ -91,9 +91,11 @@ class FakeMux:
         self.zero_humidity_on_error = False
         self._in_session = False
         self.environment_sensors = []
+        self.session_calls = []
 
     @contextlib.contextmanager
     def session(self, close_on_exit=False):
+        self.session_calls.append(close_on_exit)
         self._in_session = True
         try:
             yield
@@ -136,9 +138,13 @@ class FakePrinter:
         self.objects = {"gcode": self.gcode}
         self.events = []
         self.shutdowns = []
+        self.shutdown_state = False
 
     def get_reactor(self):
         return self.reactor
+
+    def is_shutdown(self):
+        return self.shutdown_state
 
     def load_object(self, config, section):
         self.objects[section] = self.mux
@@ -368,6 +374,15 @@ class BME280RecoveryTests(unittest.TestCase):
         sensor.consecutive_failure_count = 15
 
         self.assertEqual(sensor._sample_bme280(0.), self.reactor.NEVER)
+
+    def test_printer_shutdown_stops_sampling_without_console_output(self):
+        sensor, _ = self._make_sensor([])
+        self.printer.shutdown_state = True
+
+        self.assertEqual(sensor._sample_bme280(0.), self.reactor.NEVER)
+        self.assertEqual(self.mux.session_calls, [])
+        self.assertEqual(self.printer.gcode.responses, [])
+        self.assertEqual(self.printer.gcode.raw_responses, [])
 
     def test_initialization_failure_retries_without_shutdown(self):
         sensor, published = self._make_sensor([

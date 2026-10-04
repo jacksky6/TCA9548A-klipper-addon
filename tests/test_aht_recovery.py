@@ -197,9 +197,13 @@ class FakePrinter:
         self.objects = {"gcode": self.gcode}
         self.events = []
         self.shutdowns = []
+        self.shutdown_state = False
 
     def get_reactor(self):
         return self.reactor
+
+    def is_shutdown(self):
+        return self.shutdown_state
 
     def load_object(self, config, section):
         self.objects[section] = self.mux
@@ -879,6 +883,27 @@ class AHTRecoveryTests(unittest.TestCase):
 
         self.assertEqual(self.mux.session_close_on_exit, [True])
 
+    def test_printer_shutdown_stops_sampling_without_i2c_or_console(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        self.printer.shutdown_state = True
+
+        with mock.patch.object(self.aht.logging, "info") as logged_info:
+            self.assertEqual(sensor._sample_aht(100.), self.reactor.NEVER)
+
+        logged_info.assert_called_once_with(
+            "%s %s: sampling stopped because Klipper is shutdown",
+            "aht2x_tca9548a", "chamber")
+        self.assertEqual(raw_i2c.i2c_transfer_cmd.calls, [])
+        self.assertEqual(self.mux.session_close_on_exit, [])
+        self.assertEqual(self.printer.gcode.responses, [])
+        self.assertEqual(self.printer.gcode.raw_responses, [])
+        status = sensor.get_status(100.)
+        self.assertFalse(status["valid"])
+        self.assertFalse(status["communication_ok"])
+        self.assertTrue(status["sampling_stopped"])
+
     def test_fifteen_failures_stop_sensor_sampling(self):
         raw_i2c = FakeModernI2C([])
         self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
@@ -936,6 +961,24 @@ class AHTRecoveryTests(unittest.TestCase):
             "initialization", "START_NACK", "I2CStatusError",
             "MCU 'mcu' I2C request to addr 56 reports error START_NACK "
             "during write"))
+
+    def test_shutdown_discards_pending_console_failure(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        error = self.core.I2CStatusError(raw_i2c, "START_NACK", "write",
+                                         3, 0)
+
+        sensor._record_failure("initialization", error)
+        self.printer.shutdown_state = True
+        sensor.handle_ready()
+
+        self.assertEqual(sensor._emit_pending_web_notification(1.),
+                         self.reactor.NEVER)
+        self.assertEqual(self.printer.gcode.responses, [])
+        self.assertEqual(self.printer.gcode.raw_responses, [])
+        self.assertIsNone(sensor._pending_web_notification)
+        self.assertTrue(sensor._sampling_stopped())
 
     def test_startup_recovery_cancels_pending_console_failure(self):
         raw_i2c = FakeModernI2C([])

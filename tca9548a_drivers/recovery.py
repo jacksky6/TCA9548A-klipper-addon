@@ -45,6 +45,7 @@ class EnvironmentRecoveryMixin:
         self.consecutive_failure_count = 0
         self._last_log_error_key = None
         self._last_web_error_key = None
+        self._shutdown_sampling_stopped = False
         self._klippy_ready = False
         self._pending_web_notification = None
         self._status_patched = False
@@ -60,7 +61,8 @@ class EnvironmentRecoveryMixin:
                 self.reactor.monotonic() + WEB_CONSOLE_READY_DELAY)
 
     def _record_failure(self, stage, error):
-        if self._sampling_stopped():
+        if (self._sampling_stopped()
+                or self._stop_sampling_if_printer_shutdown()):
             return
         now = self.reactor.monotonic()
         self.valid = False
@@ -103,8 +105,24 @@ class EnvironmentRecoveryMixin:
             self._report_sampling_stopped(details)
 
     def _sampling_stopped(self):
-        return (self.consecutive_failure_count >=
+        return (self._shutdown_sampling_stopped
+                or self.consecutive_failure_count >=
                 MAX_CONSECUTIVE_ENVIRONMENT_FAILURES)
+
+    def _stop_sampling_if_printer_shutdown(self):
+        """Stop retries that cannot succeed while Klipper is shutdown."""
+        if not self.printer.is_shutdown():
+            return False
+        if self._shutdown_sampling_stopped:
+            return True
+        self._shutdown_sampling_stopped = True
+        self.valid = False
+        self.communication_ok = False
+        # A delayed startup failure must not be emitted after shutdown.
+        self._pending_web_notification = None
+        logging.info("%s %s: sampling stopped because Klipper is shutdown",
+                     self.model, self.name)
+        return True
 
     def _report_sampling_stopped(self, details):
         reason = details.get("i2c_bus_status", details["message"])
@@ -150,6 +168,8 @@ class EnvironmentRecoveryMixin:
                 self._last_web_error_key = key
 
     def _emit_pending_web_notification(self, eventtime):
+        if self._stop_sampling_if_printer_shutdown():
+            return self.reactor.NEVER
         pending = self._pending_web_notification
         self._pending_web_notification = None
         if pending is not None and self.communication_ok is False:
