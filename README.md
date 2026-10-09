@@ -401,14 +401,19 @@ polls do not all run at the same instant.
 
 `AHT1X_TCA9548A`, `AHT2X_TCA9548A`, and `AHT3X_TCA9548A` use the add-on's
 standalone `tca9548a_drivers/aht.py` driver. `BME280_TCA9548A` and
-`SHT3X_TCA9548A` retain the installed Klipper/Kalico measurement algorithms,
-but use add-on recovery wrappers and the same recoverable mux transport. No
-Klipper/Kalico source changes are required.
+`SHT3X_TCA9548A` use the installed Klipper/Kalico setup paths where applicable,
+with add-on-controlled sampling, recovery, and the same recoverable mux
+transport. No Klipper/Kalico source changes are required.
 
 With a modern host and matching MCU firmware, a failed initialization or sample
 from any supported type records the failure, marks the reading invalid, and
 retries a full sensor initialization after the shared
 `environment_report_time`. A successful retry marks the reading valid again.
+Each recoverable environment I2C operation is issued once with host-side retry
+disabled. AHT and SHT3X make one measurement attempt per scheduled sample; a
+busy AHT response or a failed SHT3X fetch ends that sample without repeating
+the command or sending a soft reset. The next normal environment interval
+starts a fresh attempt.
 After 15 consecutive failures, that sensor stops sampling for the rest of the
 Klipper process. It no longer submits I2C traffic or affects other sensors on
 the mux. The Console and `klippy.log` identify the final error and advise
