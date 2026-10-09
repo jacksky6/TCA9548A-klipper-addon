@@ -509,6 +509,9 @@ class TcaResetTests(unittest.TestCase):
         mux.name = "mux0"
         mux.reactor = self.reactor
         mux.mutex = FakeMutex()
+        mux.config_mcu = "EMU_1"
+        mux.config_bus = "i2c1_PB6_PB7"
+        mux.config_address = 112
         mux.select_delay = 0.
         mux.verify_select = False
         mux.i2c = FakeModernI2C(responses or [success([0])])
@@ -518,6 +521,9 @@ class TcaResetTests(unittest.TestCase):
         mux.reset_settle_time = .010
         mux.reset_recovery_cooldown = 30.
         mux.environment_report_time = 60
+        mux.pause_env_on_toolchange = False
+        mux.environment_sensors = []
+        mux.manual_environment_sampling_paused = False
         mux.reset_count = 0
         mux.auto_reset_count = 0
         mux.auto_reset_failure_count = 0
@@ -599,6 +605,43 @@ class TcaResetTests(unittest.TestCase):
         self.assertEqual(self.reset_pin.max_duration, 0.)
         self.assertEqual(self.reset_pin.start_values, (False, False))
         self.assertIn("TCA_RESET", [command[0] for command in gcode.commands])
+        self.assertIn("TCA_PAUSE_ENV_SAMPLING",
+                      [command[0] for command in gcode.commands])
+        self.assertIn("TCA_RESUME_ENV_SAMPLING",
+                      [command[0] for command in gcode.commands])
+
+    def test_manual_environment_sampling_pause_and_resume(self):
+        mux = self._make_mux()
+        gcmd = FakeGCmd()
+
+        mux.cmd_TCA_PAUSE_ENV_SAMPLING(gcmd)
+
+        self.assertTrue(mux.manual_environment_sampling_paused)
+        self.assertTrue(mux.should_pause_environment_sampling(0.))
+        self.assertTrue(mux.get_status(0.)[
+            "manual_environment_sampling_paused"])
+        self.assertEqual(gcmd.responses, [
+            "TCA9548A 'mux0': environment sampling paused",
+        ])
+
+        mux.cmd_TCA_PAUSE_ENV_SAMPLING(gcmd)
+        self.assertEqual(gcmd.responses[-1],
+                         "TCA9548A 'mux0': environment sampling is already "
+                         "paused")
+
+        mux.cmd_TCA_RESUME_ENV_SAMPLING(gcmd)
+
+        self.assertFalse(mux.manual_environment_sampling_paused)
+        self.assertFalse(mux.should_pause_environment_sampling(0.))
+        self.assertFalse(mux.get_status(0.)[
+            "manual_environment_sampling_paused"])
+        self.assertEqual(gcmd.responses[-1],
+                         "TCA9548A 'mux0': environment sampling resumed")
+
+        mux.cmd_TCA_RESUME_ENV_SAMPLING(gcmd)
+        self.assertEqual(
+            gcmd.responses[-1],
+            "TCA9548A 'mux0': environment sampling is not manually paused")
 
     def test_error_value_options_are_read_from_mux_config(self):
         raw_i2c = FakeModernI2C([])
@@ -875,6 +918,10 @@ class ToolchangePauseTests(unittest.TestCase):
         self.assertFalse(mux.should_pause_environment_sampling(31.))
 
         afc.status["current_state"] = "Unloading"
+        self.assertTrue(mux.should_pause_environment_sampling(32.))
+        gcmd = FakeGCmd()
+        mux.cmd_TCA_PAUSE_ENV_SAMPLING(gcmd)
+        mux.cmd_TCA_RESUME_ENV_SAMPLING(gcmd)
         self.assertTrue(mux.should_pause_environment_sampling(32.))
         afc.status["current_state"] = "Idle"
         mmu.status["action"] = "Purging"

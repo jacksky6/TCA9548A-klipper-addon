@@ -410,6 +410,70 @@ At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
 same mux are spread evenly across `environment_report_time` so their periodic
 polls do not all run at the same instant.
 
+## Runtime Commands
+
+All commands use the name from `[tca9548a <name>]`. For example, the commands
+below use a mux named `mux1`.
+
+### Environment Sampling
+
+Use these commands around a manually invoked purge or another operation where
+environment sensor I2C traffic should be deferred:
+
+```gcode
+TCA_PAUSE_ENV_SAMPLING MUX=mux1
+# Run the purge or other high-load operation.
+TCA_RESUME_ENV_SAMPLING MUX=mux1
+```
+
+`TCA_PAUSE_ENV_SAMPLING` sets a manual pause for all supported AHT, BME280, and
+SHT3X environment sensors behind that mux. It does not stop or recreate their
+timers, change the selected TCA channel, reset the mux, or block other I2C
+devices such as a PN532. A scheduled environment sample simply skips its I2C
+work while the pause is set.
+
+`TCA_RESUME_ENV_SAMPLING` clears only this manual pause. Sampling resumes on
+each sensor's next normally scheduled, staggered interval; it does not force
+all sensors to sample at once. If `pause_env_on_toolchange: True` is enabled,
+an active AFC or Happy Hare toolchange still keeps sampling paused after the
+manual pause is cleared.
+
+### Mux Control and Reset
+
+Use these commands for manual mux checks while the printer is idle and no
+downstream device is expected to be communicating:
+
+```gcode
+TCA_SELECT MUX=mux1 CHANNEL=0
+TCA_STATUS MUX=mux1
+TCA_SELECT MUX=mux1
+```
+
+`TCA_SELECT` selects one channel from `0` through `7`. Omitting `CHANNEL`
+disables every mux channel. `TCA_STATUS` reads the TCA control register and
+reports the selected channels and whether the installed I2C interface supports
+modern status responses.
+
+With `reset_pin` configured, this sequence tests a hardware reset:
+
+```gcode
+TCA_SELECT MUX=mux1 CHANNEL=0
+TCA_STATUS MUX=mux1
+TCA_RESET MUX=mux1
+TCA_STATUS MUX=mux1
+```
+
+First confirm that the selected channel is reported, then run the reset. On
+modern I2C firmware, `TCA_RESET` reports `reset verified` only after the reset
+pulse is sent and a read-back confirms the TCA control register is `0x00`. The
+final status command should therefore report `active_channels=none`. This
+verifies that the selected channel was cleared by the reset. On legacy I2C
+firmware, the command reports
+`pulsed (not verified on legacy I2C)` because a failed verification could stop
+the MCU; the GPIO pulse is sent, but software cannot safely prove the result.
+The reset disconnects downstream I2C channels only. It does not remove power
+from downstream devices.
+
 ## Environment Sensor I2C Recovery
 
 `AHT1X_TCA9548A`, `AHT2X_TCA9548A`, and `AHT3X_TCA9548A` use the add-on's
@@ -492,16 +556,8 @@ debug_skip_init: True
 ```
 
 This prevents startup from automatically writing to the mux or initializing the
-AHT2X sensor. After Klipper reaches ready state, manually test the mux with:
-
-```gcode
-TCA_SELECT MUX=mux1 CHANNEL=0
-TCA_STATUS MUX=mux1
-TCA_SELECT MUX=mux1
-```
-
-The first command selects channel 0. `TCA_STATUS` reads back the TCA9548A
-control register. The last command disables all channels.
+AHT2X sensor. After Klipper reaches ready state, use the commands in
+[Runtime Commands](#runtime-commands) to test the mux manually.
 
 `select_delay` waits after each mux write. It defaults to `0`, because the
 TCA9548A normally does not need a command processing delay. `verify_select`

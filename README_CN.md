@@ -341,6 +341,58 @@ ready 30 秒后一次性检测已加载的 AFC 和 Happy Hare 对象，并将结
 Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器会在
 `environment_report_time` 内均匀错开，避免周期轮询集中在同一时刻。
 
+## 运行期命令
+
+所有命令使用 `[tca9548a <名称>]` 中配置的复用器名称。以下示例使用 `mux1`。
+
+### 环境传感器采样
+
+独立执行 purge 或其他希望暂缓环境传感器 I2C 通信的高负载操作前后，可执行：
+
+```gcode
+TCA_PAUSE_ENV_SAMPLING MUX=mux1
+# 执行 purge 或其他高负载操作。
+TCA_RESUME_ENV_SAMPLING MUX=mux1
+```
+
+`TCA_PAUSE_ENV_SAMPLING` 会为该复用器下所有受支持的 AHT、BME280 和 SHT3X
+环境传感器设置手动暂停。它不会停止或重建计时器、改变当前 TCA 通道、复位复用器，
+也不会阻止 PN532 等其他 I2C 设备。每次环境传感器原有的定时采样到达时，只会跳过
+本次 I2C 操作。
+
+`TCA_RESUME_ENV_SAMPLING` 只清除此手动暂停。各传感器会在自己下一个原有且错开的
+采样周期恢复，不会同时立即采样。若启用了 `pause_env_on_toolchange: True`，手动恢复后
+正在进行的 AFC 或 Happy Hare 换料仍会继续暂停采样。
+
+### 复用器控制与复位
+
+在打印机空闲且预期没有下游设备通信时，可使用下列命令手动检查复用器：
+
+```gcode
+TCA_SELECT MUX=mux1 CHANNEL=0
+TCA_STATUS MUX=mux1
+TCA_SELECT MUX=mux1
+```
+
+`TCA_SELECT` 可选择 `0` 至 `7` 中的一个通道；省略 `CHANNEL` 会关闭全部复用器通道。
+`TCA_STATUS` 会读取 TCA 控制寄存器，报告已选通通道，以及当前 I2C 接口是否支持新版的
+状态响应。
+
+配置了 `reset_pin` 时，可用下面的顺序测试硬件复位：
+
+```gcode
+TCA_SELECT MUX=mux1 CHANNEL=0
+TCA_STATUS MUX=mux1
+TCA_RESET MUX=mux1
+TCA_STATUS MUX=mux1
+```
+
+先确认状态命令显示已选通的通道，再执行复位。在新版 I2C 固件上，`TCA_RESET` 只有在发送
+复位脉冲后读回 TCA 控制寄存器为 `0x00` 时，才会报告 `reset verified`；最后的状态命令应显示
+`active_channels=none`。这能证明选通的通道已被复位清除。在旧版 I2C 固件上，命令会显示
+`pulsed (not verified on legacy I2C)`：GPIO 脉冲已发送，但失败的验证可能使 MCU 停机，
+软件不能安全地证明复位结果。复位只断开下游 I2C 通道，不会切断下游设备供电。
+
 ## 环境传感器 I2C 恢复
 
 `AHT1X_TCA9548A`、`AHT2X_TCA9548A` 和 `AHT3X_TCA9548A` 使用扩展独立的
@@ -406,16 +458,7 @@ debug_skip_init: True
 ```
 
 这样启动时不会自动向复用器写入数据，也不会初始化 AHT2X 传感器。Klipper 到达 ready
-状态后，可手动执行：
-
-```gcode
-TCA_SELECT MUX=mux1 CHANNEL=0
-TCA_STATUS MUX=mux1
-TCA_SELECT MUX=mux1
-```
-
-第一条命令选择通道 0；`TCA_STATUS` 读取 TCA9548A 控制寄存器；最后一条命令关闭所有
-通道。
+状态后，可使用上方“运行期命令”章节中的命令手动测试复用器。
 
 `select_delay` 在每次复用器写入后等待，默认 `0`，因为 TCA9548A 通常不需要命令处理
 延迟。`verify_select` 会在每次写入后读回控制寄存器，只有读回字节与请求通道掩码一致时

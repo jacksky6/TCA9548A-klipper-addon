@@ -276,6 +276,7 @@ class TCA9548A:
         self.environment_sensors = []
         self.environment_schedule = {}
         self.environment_schedule_ready = False
+        self.manual_environment_sampling_paused = False
         self._print_stats = None
         self._afc = None
         self._mmu = None
@@ -297,6 +298,14 @@ class TCA9548A:
         self.gcode.register_mux_command("TCA_RESET", "MUX", self.name,
                                         self.cmd_TCA_RESET,
                                         desc=self.cmd_TCA_RESET_help)
+        self.gcode.register_mux_command(
+            "TCA_PAUSE_ENV_SAMPLING", "MUX", self.name,
+            self.cmd_TCA_PAUSE_ENV_SAMPLING,
+            desc=self.cmd_TCA_PAUSE_ENV_SAMPLING_help)
+        self.gcode.register_mux_command(
+            "TCA_RESUME_ENV_SAMPLING", "MUX", self.name,
+            self.cmd_TCA_RESUME_ENV_SAMPLING,
+            desc=self.cmd_TCA_RESUME_ENV_SAMPLING_help)
 
     def _handle_connect(self):
         if not self.debug_no_disable:
@@ -338,7 +347,9 @@ class TCA9548A:
         return state is not None and state != "Idle"
 
     def should_pause_environment_sampling(self, eventtime):
-        """Return whether a print-time AFC or Happy Hare action is active."""
+        """Return whether manual or print-time sampling suppression is active."""
+        if self.manual_environment_sampling_paused:
+            return True
         if (not self.pause_env_on_toolchange
                 or self._print_stats is None
                 or (self._afc is None and self._mmu is None)):
@@ -736,6 +747,8 @@ class TCA9548A:
             "i2c_status_supported": i2c_status_supported(self.i2c),
             "environment_report_time": self.environment_report_time,
             "environment_sensor_count": len(self.environment_sensors),
+            "manual_environment_sampling_paused": (
+                self.manual_environment_sampling_paused),
             "reset_configured": self.reset_pin is not None,
             "reset_active_high": self.reset_active_high,
             "reset_pulse_time": self.reset_pulse_time,
@@ -805,6 +818,34 @@ class TCA9548A:
                               self.name,
                               self.last_reset_result,
                               remaining))
+
+    cmd_TCA_PAUSE_ENV_SAMPLING_help = (
+        "Pause TCA9548A environment sensor sampling")
+    def cmd_TCA_PAUSE_ENV_SAMPLING(self, gcmd):
+        if self.manual_environment_sampling_paused:
+            gcmd.respond_info(
+                "TCA9548A '%s': environment sampling is already paused" % (
+                    self.name,))
+            return
+        self.manual_environment_sampling_paused = True
+        logging.info("TCA9548A '%s': environment sampling manually paused",
+                     self.name)
+        gcmd.respond_info("TCA9548A '%s': environment sampling paused" % (
+            self.name,))
+
+    cmd_TCA_RESUME_ENV_SAMPLING_help = (
+        "Resume TCA9548A environment sensor sampling")
+    def cmd_TCA_RESUME_ENV_SAMPLING(self, gcmd):
+        if not self.manual_environment_sampling_paused:
+            gcmd.respond_info(
+                "TCA9548A '%s': environment sampling is not manually paused" % (
+                    self.name,))
+            return
+        self.manual_environment_sampling_paused = False
+        logging.info("TCA9548A '%s': environment sampling manually resumed",
+                     self.name)
+        gcmd.respond_info(
+            "TCA9548A '%s': environment sampling resumed" % (self.name,))
 
 
 class MuxedI2C:
