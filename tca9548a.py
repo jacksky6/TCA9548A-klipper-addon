@@ -11,6 +11,7 @@ Typical temperature-sensor configuration::
     i2c_bus: i2c1_PB6_PB7
     i2c_address: 112              # 0x70
     environment_report_time: 60
+    # pause_env_on_toolchange: True
     # zero_temperature_on_error: False
     # zero_humidity_on_error: False
     # Optional hardware reset control:
@@ -46,6 +47,7 @@ TCA9548A_I2C_ADDR = 0x70
 DEFAULT_RESET_PULSE_TIME = .010
 DEFAULT_RESET_SETTLE_TIME = .010
 DEFAULT_RESET_RECOVERY_COOLDOWN = 30.
+TOOLCHANGE_DETECTION_DELAY = 30.
 # Automatic mux reset stops after one failure group. Environment sensors use
 # three groups before stopping their own sampling.
 RECOVERY_FAILURE_GROUP_SIZE = 5
@@ -209,6 +211,8 @@ class TCA9548A:
                                             minval=0, maxval=127)
         self.environment_report_time = config.getint(
             "environment_report_time", 60, minval=5)
+        self.pause_env_on_toolchange = config.getboolean(
+            "pause_env_on_toolchange", False)
         self.zero_temperature_on_error = config.getboolean(
             "zero_temperature_on_error", False)
         self.zero_humidity_on_error = config.getboolean(
@@ -272,8 +276,17 @@ class TCA9548A:
         self.environment_sensors = []
         self.environment_schedule = {}
         self.environment_schedule_ready = False
+        self._print_stats = None
+        self._afc = None
+        self._mmu = None
+        self._toolchange_detection_timer = None
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
+        if self.pause_env_on_toolchange:
+            self._toolchange_detection_timer = self.reactor.register_timer(
+                self._detect_toolchange_sources)
+            self.printer.register_event_handler("klippy:ready",
+                                                self._handle_ready)
         self.gcode = self.printer.lookup_object("gcode")
         self.gcode.register_mux_command("TCA_SELECT", "MUX", self.name,
                                         self.cmd_TCA_SELECT,
@@ -289,6 +302,56 @@ class TCA9548A:
         if not self.debug_no_disable:
             self.disable_all()
         self._build_environment_schedule()
+
+    def _handle_ready(self):
+        self.reactor.update_timer(
+            self._toolchange_detection_timer,
+            self.reactor.monotonic() + TOOLCHANGE_DETECTION_DELAY)
+
+    def _detect_toolchange_sources(self, eventtime):
+        if self.printer.is_shutdown():
+            return self.reactor.NEVER
+        self._print_stats = self.printer.lookup_object("print_stats", None)
+        self._afc = self.printer.lookup_object("AFC", None)
+        self._mmu = self.printer.lookup_object("mmu", None)
+        sources = []
+        if self._afc is not None:
+            sources.append("AFC")
+        if self._mmu is not None:
+            sources.append("Happy Hare")
+        if sources:
+            logging.info("TCA9548A '%s': pause_env_on_toolchange enabled; "
+                         "detected %s", self.name, ", ".join(sources))
+        else:
+            logging.info("TCA9548A '%s': pause_env_on_toolchange enabled; "
+                         "no AFC or Happy Hare detected", self.name)
+        return self.reactor.NEVER
+
+    @staticmethod
+    def _toolchange_active(source, status_key, eventtime):
+        if source is None:
+            return False
+        try:
+            state = source.get_status(eventtime).get(status_key)
+        except Exception:
+            return False
+        return state is not None and state != "Idle"
+
+    def should_pause_environment_sampling(self, eventtime):
+        """Return whether a print-time AFC or Happy Hare action is active."""
+        if (not self.pause_env_on_toolchange
+                or self._print_stats is None
+                or (self._afc is None and self._mmu is None)):
+            return False
+        try:
+            printing = (self._print_stats.get_status(eventtime).get("state")
+                        == "printing")
+        except Exception:
+            return False
+        if not printing:
+            return False
+        return (self._toolchange_active(self._afc, "current_state", eventtime)
+                or self._toolchange_active(self._mmu, "action", eventtime))
 
     def register_environment_sensor(self, sensor, channel):
         self.environment_sensors.append((channel, sensor.name, sensor))

@@ -94,6 +94,7 @@ class FakeMux:
         self._in_session = False
         self.environment_sensors = []
         self.session_calls = []
+        self.pause_environment_sampling = False
 
     @contextlib.contextmanager
     def session(self, close_on_exit=False):
@@ -112,6 +113,9 @@ class FakeMux:
 
     def is_busy(self):
         return False
+
+    def should_pause_environment_sampling(self, eventtime):
+        return self.pause_environment_sampling
 
     def register_environment_sensor(self, sensor, channel):
         self.environment_sensors.append((sensor, channel))
@@ -388,6 +392,13 @@ class BME280RecoveryTests(unittest.TestCase):
         sensor.consecutive_failure_count = 15
 
         self.assertEqual(sensor._sample_bme280(0.), self.reactor.NEVER)
+
+    def test_toolchange_pause_skips_bme280_i2c(self):
+        sensor, _ = self._make_sensor([])
+        self.mux.pause_environment_sampling = True
+
+        self.assertEqual(sensor._sample_bme280(100.), 160.)
+        self.assertEqual(self.mux.session_calls, [])
 
     def test_printer_shutdown_stops_sampling_without_console_output(self):
         sensor, _ = self._make_sensor([])

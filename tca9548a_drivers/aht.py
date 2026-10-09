@@ -156,6 +156,8 @@ class AHTBase(EnvironmentRecoveryMixin):
         if (self._sampling_stopped()
                 or self._stop_sampling_if_printer_shutdown()):
             return self.reactor.NEVER
+        if self._mux.should_pause_environment_sampling(eventtime):
+            return eventtime + self.report_time
         if self._mux.is_busy():
             return eventtime + self.report_time
         with self._mux.session(close_on_exit=True):

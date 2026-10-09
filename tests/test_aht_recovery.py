@@ -151,6 +151,7 @@ class FakeMux:
         self._in_session = False
         self.environment_sensors = []
         self.session_close_on_exit = []
+        self.pause_environment_sampling = False
 
     @contextlib.contextmanager
     def session(self, close_on_exit=False):
@@ -169,6 +170,9 @@ class FakeMux:
 
     def is_busy(self):
         return False
+
+    def should_pause_environment_sampling(self, eventtime):
+        return self.pause_environment_sampling
 
     def register_environment_sensor(self, sensor, channel):
         self.environment_sensors.append((sensor, channel))
@@ -366,9 +370,13 @@ class FakeTcaPrinter:
         self.reactor = reactor
         self.objects = {"pins": pins, "gcode": gcode}
         self.events = []
+        self.shutdown_state = False
 
     def get_reactor(self):
         return self.reactor
+
+    def is_shutdown(self):
+        return self.shutdown_state
 
     def lookup_object(self, name, default=None):
         return self.objects.get(name, default)
@@ -413,6 +421,16 @@ class FakeTcaConfig:
 
     def error(self, message):
         return RuntimeError(message)
+
+
+class FakeStatusObject:
+    def __init__(self, status):
+        self.status = status
+        self.calls = []
+
+    def get_status(self, eventtime):
+        self.calls.append(eventtime)
+        return dict(self.status)
 
 
 class FakeGCmd:
@@ -809,6 +827,84 @@ class TcaResetTests(unittest.TestCase):
         ])
 
 
+class ToolchangePauseTests(unittest.TestCase):
+    def setUp(self):
+        self.bus, self.core, self.aht = _load_driver_modules()
+        self.reactor = FakeTcaReactor()
+        self.reset_pin = FakeResetPin(FakeMCU())
+        self.gcode = FakeTcaGCode()
+        self.pins = FakePins(self.reset_pin)
+        self.printer = FakeTcaPrinter(self.reactor, self.pins, self.gcode)
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: FakeModernI2C([])
+
+    def _make_mux(self, enabled=True):
+        return self.core.TCA9548A(FakeTcaConfig(self.printer, {
+            "pause_env_on_toolchange": enabled,
+        }))
+
+    def test_disabled_by_default_does_not_register_detection_timer(self):
+        mux = self._make_mux(enabled=False)
+
+        self.assertIsNone(mux._toolchange_detection_timer)
+        self.assertNotIn("klippy:ready", [event for event, ignored
+                                           in self.printer.events])
+
+    def test_ready_detection_logs_sources_and_pauses_only_active_prints(self):
+        print_stats = FakeStatusObject({"state": "printing"})
+        afc = FakeStatusObject({"current_state": "Idle"})
+        mmu = FakeStatusObject({"action": "Idle"})
+        self.printer.objects.update({
+            "print_stats": print_stats,
+            "AFC": afc,
+            "mmu": mmu,
+        })
+        mux = self._make_mux()
+        ready_callback = next(callback for event, callback
+                              in self.printer.events if event == "klippy:ready")
+
+        ready_callback()
+
+        self.assertEqual(self.reactor.updated_timer, (
+            mux._toolchange_detection_timer, 30.))
+        with self.assertLogs(level="INFO") as logged:
+            self.assertEqual(mux._detect_toolchange_sources(30.),
+                             self.reactor.NEVER)
+        self.assertIn(
+            "TCA9548A 'mux0': pause_env_on_toolchange enabled; "
+            "detected AFC, Happy Hare", "\n".join(logged.output))
+        self.assertFalse(mux.should_pause_environment_sampling(31.))
+
+        afc.status["current_state"] = "Unloading"
+        self.assertTrue(mux.should_pause_environment_sampling(32.))
+        afc.status["current_state"] = "Idle"
+        mmu.status["action"] = "Purging"
+        self.assertTrue(mux.should_pause_environment_sampling(33.))
+
+        print_stats.status["state"] = "paused"
+        self.assertFalse(mux.should_pause_environment_sampling(34.))
+
+    def test_missing_status_field_keeps_sampling_enabled(self):
+        self.printer.objects.update({
+            "print_stats": FakeStatusObject({"state": "printing"}),
+            "AFC": FakeStatusObject({}),
+        })
+        mux = self._make_mux()
+
+        mux._detect_toolchange_sources(30.)
+
+        self.assertFalse(mux.should_pause_environment_sampling(31.))
+
+    def test_detection_does_nothing_after_shutdown(self):
+        self.printer.shutdown_state = True
+        mux = self._make_mux()
+
+        self.assertEqual(mux._detect_toolchange_sources(30.),
+                         self.reactor.NEVER)
+        self.assertIsNone(mux._print_stats)
+        self.assertIsNone(mux._afc)
+        self.assertIsNone(mux._mmu)
+
+
 class AHTRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.bus, self.core, self.aht = _load_driver_modules()
@@ -982,6 +1078,16 @@ class AHTRecoveryTests(unittest.TestCase):
         sensor._sample_aht(0.)
 
         self.assertEqual(self.mux.session_close_on_exit, [True])
+
+    def test_toolchange_pause_skips_aht_i2c(self):
+        raw_i2c = FakeModernI2C([])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        self.mux.pause_environment_sampling = True
+        sensor = self.aht.AHT2x(self.config)
+
+        self.assertEqual(sensor._sample_aht(100.), 160.)
+        self.assertEqual(raw_i2c.i2c_transfer_cmd.calls, [])
+        self.assertEqual(self.mux.session_close_on_exit, [])
 
     def test_printer_shutdown_stops_sampling_without_i2c_or_console(self):
         raw_i2c = FakeModernI2C([])
