@@ -229,7 +229,7 @@ SHT3X_TCA9548A
 i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70，A0/A1/A2 均为低；0x71-0x77 使用 113-119
-environment_report_time: 60
+environment_report_time: 120
 # 可选：打印中 AFC 或 Happy Hare 换料动作期间跳过环境传感器采样。
 # Klipper ready 后延迟 30 秒检测一次。
 # pause_env_on_toolchange: True
@@ -310,7 +310,7 @@ max_temp: 80
 引脚设置的唯一来源；下游传感器段中同名的设置会被忽略。示例使用
 `EMU_1` 与 `i2c1_PB6_PB7`。
 
-`environment_report_time` 是该复用器下环境传感器的轮询间隔，单位秒，默认为 `60`。
+`environment_report_time` 是该复用器下环境传感器的轮询间隔，单位秒，默认为 `120`。
 TCA9548A AHT 传感器段刻意不支持 `aht10_report_time`；请在复用器段设置共享轮询间隔，
 以便一起调度所有通道。`BME280_TCA9548A` 不支持单传感器 `bme280_report_time`，
 `SHT3X_TCA9548A` 也使用复用器间隔，不支持单传感器 `sht3x_report_time`。
@@ -415,7 +415,7 @@ TCA_STATUS MUX=mux1
 
 相同错误在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会将失败阶段、I2C 状态和
 重试间隔显示为错误行，例如
-`TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`。已显示失败后，
+`TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 120s`。已显示失败后，
 首次重试成功会显示 `recovered`。测量失败后若出现 `initialization failed`，表示驱动正在
 再次采样前重新初始化。
 

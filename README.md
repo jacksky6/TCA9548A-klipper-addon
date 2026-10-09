@@ -273,7 +273,7 @@ settings, channel numbers, I2C addresses, and temperature limits accordingly.
 i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
-environment_report_time: 60
+environment_report_time: 120
 # Optional: skip environment samples while AFC or Happy Hare changes filament
 # during a print. Detection runs once 30 seconds after Klipper is ready.
 # pause_env_on_toolchange: True
@@ -358,7 +358,7 @@ behind the mux. Any of those options in a downstream sensor section are
 ignored. The example uses `EMU_1` and `i2c1_PB6_PB7`.
 
 `environment_report_time` sets the polling interval, in seconds, for
-environment sensors on that mux. It defaults to `60`. TCA9548A AHT sensor
+environment sensors on that mux. It defaults to `120`. TCA9548A AHT sensor
 sections intentionally do not support `aht10_report_time`; set the shared
 polling interval on the mux so all lanes can be scheduled together.
 `BME280_TCA9548A` follows the same rule and does not support per-sensor
@@ -488,7 +488,7 @@ sensors. Repair the fault, then run `FIRMWARE_RESTART` to initialize it again.
 
 Repeated errors are rate-limited in `klippy.log`. Fluidd/Mainsail Console shows
 the failure stage, I2C status, and retry interval as an error line, for example
-`TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`.
+`TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 120s`.
 The first successful retry after a displayed failure reports `recovered`. If a
 measurement failure is followed by `initialization failed`, the driver is
 reinitializing before the next sample.

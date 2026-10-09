@@ -597,7 +597,7 @@ class TcaResetTests(unittest.TestCase):
         mux = self.core.TCA9548A(config)
 
         self.assertIs(mux.reset_pin, self.reset_pin)
-        self.assertEqual(mux.environment_report_time, 60)
+        self.assertEqual(mux.environment_report_time, 120)
         self.assertFalse(mux.zero_temperature_on_error)
         self.assertFalse(mux.zero_humidity_on_error)
         self.assertTrue(mux.reset_active_high)

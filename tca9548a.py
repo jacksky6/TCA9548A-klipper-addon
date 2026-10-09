@@ -10,7 +10,7 @@ Typical temperature-sensor configuration::
     i2c_mcu: EMU_1
     i2c_bus: i2c1_PB6_PB7
     i2c_address: 112              # 0x70
-    environment_report_time: 60
+    environment_report_time: 120
     # pause_env_on_toolchange: True
     # zero_temperature_on_error: False
     # zero_humidity_on_error: False
@@ -210,7 +210,7 @@ class TCA9548A:
                                             TCA9548A_I2C_ADDR,
                                             minval=0, maxval=127)
         self.environment_report_time = config.getint(
-            "environment_report_time", 60, minval=5)
+            "environment_report_time", 120, minval=5)
         self.pause_env_on_toolchange = config.getboolean(
             "pause_env_on_toolchange", False)
         self.zero_temperature_on_error = config.getboolean(
