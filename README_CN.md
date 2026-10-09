@@ -10,10 +10,25 @@ I2C 接口不足时，TCA9548A 可让多个下游设备共用一条硬件 I2C �
 通道独立寻址。
 
 每次受支持环境传感器的初始化或测量只会在完整操作期间选中对应通道，完成后关闭
-TCA9548A 的全部通道。这样空闲或断开的下游支路会与共享的上游 I2C 总线隔离。将来的多次传输驱动
-（例如 PN532）必须用一个 `mux.session(close_on_exit=True)` 包住完整的命令、
-ACK 和响应交换，不能将每次传输拆成独立会话。
+TCA9548A 的全部通道。这样空闲或断开的下游支路会与共享的上游 I2C 总线隔离。
 
+## 目录
+
+- [硬件与接线](#hardware)
+  - [可选硬件复位](#hardware-reset)
+- [安装](#installation)
+  - [I2C 恢复特征检查](#i2c-recovery-check)
+- [维护](#maintenance)
+  - [Fluidd/Mainsail 更新](#fluidd-mainsail-updates)
+- [配置](#configuration)
+- [运行](#operation)
+  - [运行期命令](#runtime-commands)
+  - [环境传感器恢复](#environment-recovery)
+- [调试](#debugging)
+- [范围与限制](#scope-and-limits)
+- [许可证](#license)
+
+<a id="hardware"></a>
 ## 硬件与接线
 
 <p align="center">
@@ -35,6 +50,7 @@ ACK 和响应交换，不能将每次传输拆成独立会话。
 使用 `SD7`/`SC7`。下游设备的供电和地线需要分别连接。相同 I2C 地址的设备可放在
 不同通道，因为同一时间只有被选中的通道会与上游总线连通。
 
+<a id="hardware-reset"></a>
 ### 可选硬件复位
 
 在复用器段设置 `reset_pin` 后，扩展可以不经 I2C 直接复位 TCA9548A。
@@ -53,61 +69,35 @@ Klipper 的 `!` 反相前缀；扩展会拒绝这种写法，以确保极性只�
 电阻接 GND。这样 5V 上拉能够提供有效高电平，而 MCU 只驱动 MOS 栅极。3.3V 推挽
 GPIO 直接接到 5V 的 `RESET#` 无法将其释放到 5V，不建议这样连接。
 
-以下是本板 N-MOS 接法的默认配置。取消两行复位配置前的注释即可启用硬件复位：
-
-```ini
-[tca9548a mux1]
-i2c_mcu: EMU_1
-i2c_bus: i2c1_PB6_PB7
-i2c_address: 112
-environment_report_time: 60
-# 可选：在打印中的 AFC/Happy Hare 动作期间跳过环境传感器采样。
-# pause_env_on_toolchange: True
-# zero_temperature_on_error: False
-# zero_humidity_on_error: False
-
-# reset_pin: EMU_1:PC12
-# reset_active_high: True
-# 板载 N-MOS 电路：PC12 为高时将 TCA RST 拉低；PC12 为低时正常工作。
-# reset_pulse_time: 0.010          # 默认：10 ms
-# reset_settle_time: 0.010         # 默认：10 ms
-# reset_recovery_cooldown: 30      # 默认：30 s
-```
+本板 N-MOS 电路应设置 `reset_pin: EMU_1:PC12` 与
+`reset_active_high: True`；完整示例见[配置](#configuration)。
 
 在 Klipper 启动、MCU 重启和 Klipper 关闭时，该引脚都会被设为正常的非复位电平。一次
 复位脉冲会清除 TCA9548A 控制寄存器并断开所有下游 I2C 通道；它不会切断下游设备的
 3.3V/5V 电源。
 
-重启 Klipper 后，可用以下命令测试接线：
+Klipper 启动后，请按[运行期命令](#runtime-commands)中的复位顺序验证接线。
 
-```text
-TCA_RESET MUX=mux1
-```
+#### 自动复用器恢复
 
-在现代 I2C 固件上，命令会在脉冲后读取 TCA 控制寄存器，确认硬件复位已清除所有通道。
-在旧版 I2C 固件上，它只发送硬件脉冲，不做 I2C 验证，因为失败的旧版验证可能会使 MCU
-固件停机。
+自动恢复需要配置 `reset_pin`，并使用新版 I2C 协议。
 
-当配置了 `reset_pin`，且现代 I2C 协议在访问 TCA 控制寄存器本身时返回错误，或主机
-无法取得其 `i2c_response`，扩展会自动发送复位脉冲、验证所有通道均已关闭，并只重试一次
-原控制操作。没有响应会显示为 `NO_RESPONSE`；这表示 MCU 没有返回查询结果，而不是 MCU
-返回了 I2C 总线状态。默认每 30 秒最多自动尝试一次。下游传感器的 `START_NACK` 一类错误
-不会直接复位 TCA，而是仍按传感器逻辑重试；若该故障之后妨碍访问 TCA 控制寄存器，产生的
-TCA 错误才会触发硬件恢复。若复位后的验证失败，在一个 `environment_report_time` 周期内，
-不会继续提交 TCA 控制操作或下游 I2C 传输，避免对已卡住的总线反复提交超时请求。
+- **触发条件：** TCA 控制寄存器传输返回 I2C 错误，或主机未收到 `i2c_response`
+  （`NO_RESPONSE`）。复位验证成功后，会将原 TCA 操作重试一次。
+- **不会直接复位传感器：** 下游传感器的 `START_NACK` 等错误仍是传感器错误；只有它之后
+  阻碍访问 TCA 控制寄存器时，才会触发复用器恢复。
+- **验证失败：** TCA 与下游 I2C 会暂停一个 `environment_report_time` 周期，避免对已卡住的
+  总线反复提交超时请求。
+- **停止条件：** 连续 5 次自动复位验证失败后，所有自动 TCA 和下游 I2C 操作都会停止。
+  排除故障后执行 `TCA_RESET MUX=mux1`；若仍无法验证复位，请给打印机重新上电。一次验证
+  成功的复位或成功的 TCA 控制传输会清除此失败计数。
 
-若连续 5 次自动复位后的验证都失败，复用器会停止所有自动 TCA 控制操作和下游 I2C
-访问。控制台会显示最后一次验证失败的原因，并提示检查 `RESET#` 接线和 TCA 供电。只有
-MCU 命令通道仍能接收 GPIO 命令时，复位脉冲才可能恢复由下游故障卡住的 I2C 控制器；它不能
-恢复已断开或已停机的 MCU。修复后可执行 `TCA_RESET MUX=mux1`；若仍无法验证复位，请重新给
-打印机上电。一次验证成功的复位或一次成功的 TCA 控制访问会清除连续失败计数。仅下游传感器
-的错误不会计入该上限。
+默认每 30 秒最多自动尝试一次。控制台会显示如
+`TCA9548A mux1: BUS_TIMEOUT; hardware reset` 的错误行；恢复成功后显示
+`reset verified; retrying`。验证失败只表示 GPIO 脉冲已请求、I2C 未能确认结果，不代表
+GPIO 脉冲本身失败。复用器状态包含复位配置、计数、结果与恢复暂停状态。
 
-控制台将自动尝试显示为简短的红色错误行，例如
-`TCA9548A mux1: BUS_TIMEOUT; hardware reset`；验证成功后会显示普通行
-`reset verified; retrying`。验证失败时会明确说明复位脉冲已发送且 I2C 已暂停；这不表示
-GPIO 脉冲本身失败。复用器状态还包含复位配置、计数、脉冲时间、验证结果与恢复暂停状态。
-
+<a id="installation"></a>
 ## 安装
 
 在 Klipper 或 Kalico 主机上运行：
@@ -139,6 +129,7 @@ tca9548a_drivers/
 目标分支必须已存在于本地或本地 `origin` 缓存中。非交互运行时，发现更新只会提示，
 安装仍使用本地文件继续执行。
 
+<a id="i2c-recovery-check"></a>
 ### I2C 恢复特征检查
 
 安装时，脚本会检查目标 Klipper 或 Kalico 的 `bus.py` 是否具备返回
@@ -164,7 +155,10 @@ tca9548a_drivers/
 
 该参数只表示接受限制，不会让旧版主机或 MCU 固件获得恢复能力。
 
-## 卸载
+<a id="maintenance"></a>
+## 维护
+
+### 卸载
 
 用以下任一命令移除已安装的软链接：
 
@@ -176,7 +170,8 @@ tca9548a_drivers/
 仓库目录会保留。若配置了 Moonraker 更新，请手动从 `moonraker.conf` 移除
 `[update_manager tca9548a]` 段，重启 Moonraker，然后在 Fluidd/Mainsail 中重启 Klipper。
 
-## Fluidd/Mainsail 更新
+<a id="fluidd-mainsail-updates"></a>
+### Fluidd/Mainsail 更新
 
 Fluidd 和 Mainsail 通过 Moonraker Update Manager 显示更新状态。初始安装完成后，在
 `~/printer_data/config/moonraker.conf` 中添加：
@@ -209,20 +204,12 @@ install_script: install.sh --allow-legacy-i2c
 请在自己的 `printer.cfg` 中配置 `[tca9548a]` 和 `[temperature_sensor]` 段，使其符合
 实际连接的传感器、I2C 地址和复用器通道。不要不加修改地复制示例配置。
 
-### Happy-Hare RFID PN532 集成（计划中）
+<a id="configuration"></a>
+## 配置
 
-该集成尚未实现。实现后，TCA9548A 复用器核心仍作为独立 Klipper Extra 安装于
-`klippy/extras/tca9548a.py`。Happy-Hare-RFID-Reader 的 PN532 复用器适配器只会位于
-`nfc_gates/pn532_tca9548a_driver.py`，并引用已安装的复用器核心。
+### 支持的传感器类型
 
-适配器应使用 `mux.session(close_on_exit=True)` 包住一次完整的 PN532 命令交换，使命令、
-ACK 和响应传输期间保持同一通道被选中，完成后隔离全部下游通道。
-
-RFID 项目及其安装程序不得打包、复制、下载或覆盖 `tca9548a.py`。用户可能已经安装了
-本扩展；NFC 复用器配置应在缺少该扩展时提示用户安装，存在时则保留现有文件和版本。
-通用 TCA9548A 行为仅在本仓库维护。
-
-支持的传感器类型：
+当前版本仅支持以下温湿度传感器类型：
 
 ```text
 AHT1X_TCA9548A
@@ -232,7 +219,7 @@ BME280_TCA9548A
 SHT3X_TCA9548A
 ```
 
-## 配置参考
+### 配置参考
 
 以下参考涵盖多个支持的传感器类型。只保留与实际硬件相符的段落，并按硬件调整复用器
 设置、通道号、I2C 地址和温度范围。
@@ -254,6 +241,9 @@ environment_report_time: 60
 # reset_pin: EMU_1:PC12
 # reset_active_high: True
 # 板载 N-MOS 电路：PC12 为高时将 TCA RST 拉低；PC12 为低时正常工作。
+# reset_pulse_time: 0.010          # 默认：10 ms
+# reset_settle_time: 0.010         # 默认：10 ms
+# reset_recovery_cooldown: 30      # 默认：30 s
 
 [temperature_sensor Lane_0]
 sensor_type: AHT2X_TCA9548A
@@ -341,7 +331,11 @@ ready 30 秒后一次性检测已加载的 AFC 和 Happy Hare 对象，并将结
 Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器会在
 `environment_report_time` 内均匀错开，避免周期轮询集中在同一时刻。
 
-## 运行期命令
+<a id="operation"></a>
+## 运行
+
+<a id="runtime-commands"></a>
+### 运行期命令
 
 所有命令使用 `[tca9548a <名称>]` 中配置的复用器名称。以下示例使用 `mux1`。
 
@@ -357,8 +351,8 @@ TCA_RESUME_ENV_SAMPLING MUX=mux1
 
 `TCA_PAUSE_ENV_SAMPLING` 会为该复用器下所有受支持的 AHT、BME280 和 SHT3X
 环境传感器设置手动暂停。它不会停止或重建计时器、改变当前 TCA 通道、复位复用器，
-也不会阻止 PN532 等其他 I2C 设备。每次环境传感器原有的定时采样到达时，只会跳过
-本次 I2C 操作。
+也不会阻止其他 I2C 设备。每次环境传感器原有的定时采样到达时，只会跳过本次 I2C
+操作。
 
 `TCA_RESUME_ENV_SAMPLING` 只清除此手动暂停。各传感器会在自己下一个原有且错开的
 采样周期恢复，不会同时立即采样。若启用了 `pause_env_on_toolchange: True`，手动恢复后
@@ -393,56 +387,54 @@ TCA_STATUS MUX=mux1
 `pulsed (not verified on legacy I2C)`：GPIO 脉冲已发送，但失败的验证可能使 MCU 停机，
 软件不能安全地证明复位结果。复位只断开下游 I2C 通道，不会切断下游设备供电。
 
-## 环境传感器 I2C 恢复
+<a id="environment-recovery"></a>
+### 环境传感器 I2C 恢复
 
 `AHT1X_TCA9548A`、`AHT2X_TCA9548A` 和 `AHT3X_TCA9548A` 使用扩展独立的
 `tca9548a_drivers/aht.py` 驱动。`BME280_TCA9548A` 和 `SHT3X_TCA9548A` 保留系统
 已安装 Klipper/Kalico 中适用的初始化流程，并使用扩展提供的采样、恢复控制与同一可恢复
 复用器传输层。无需修改 Klipper/Kalico 本身。
 
-使用现代主机和匹配 MCU 固件时，任一受支持类型的初始化或采样失败都会记录失败、将读数
-标为无效，并在共享的 `environment_report_time` 后重试完整传感器初始化。重试成功后读数会
-重新有效。每个可恢复环境传感器 I2C 操作只执行一次，并关闭主机层重试。AHT 和 SHT3X
-每个计划采样周期也只尝试一次测量；AHT 返回 busy 或 SHT3X 获取数据失败时，本次采样会
-直接结束，不重复命令，也不会发送软复位。下一个正常环境周期会开始新的尝试。若连续 15 次失败，该传感器会在本次 Klipper 进程内停止采样，不再提交 I2C
-访问，也不会影响同一复用器上的其他传感器。控制台和 `klippy.log` 会显示最后一次错误，
-并提示检查接线和传感器；排除故障后需要重启 Klipper 才会恢复采样。默认保留最后一次有效
-的温湿度值；两个复用器级 `zero_*_on_error` 选项可分别让温度或湿度报告为零。BME280
-已关闭气压采样与补偿计算，因此对外展示的温湿度字段与 AHT 一致。相同错误在 `klippy.log`
-中会被限频。Fluidd/Mainsail 控制台会显示失败阶段、I2C
-状态和重试间隔，例如 `TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`，
-并将其作为 Klipper 错误行显示，因而使用前端的错误颜色。测量失败后的后续重试若显示
-`initialization failed`，表示驱动正在再次采样前重新初始化传感器。详细的 MCU、地址、
-操作和异常信息仍保留在 `klippy.log`。
+#### 采样与重试
 
-`klippy.log` 会在连续第 5 次和第 10 次失败时记录持续失败汇总；第 15 次失败则记录最终的
-停止采样通知。
+使用新版主机和匹配 MCU 固件时，初始化或采样失败会将该读数标为无效，并在下一个共享的
+`environment_report_time` 重试完整初始化；重试成功后读数重新有效。
 
-如果 Klipper 已处于 shutdown 状态，受支持的环境传感器会立即停止采样，不再提交 I2C
-访问。新的及已排队的控制台失败消息都会被抑制，仅在 `klippy.log` 中记录一次停止信息。
-`FIRMWARE_RESTART` 会创建新的传感器会话并重新执行正常的启动初始化。
+- 每个可恢复 I2C 操作只执行一次，并关闭主机层重试。
+- AHT 与 SHT3X 每个计划周期只测量一次。AHT 返回 busy 或 SHT3X 获取失败时，本次直接
+  结束，不重复命令、不发送软复位。
+- 默认保留最后一次有效温湿度值。复用器级 `zero_temperature_on_error` 和
+  `zero_humidity_on_error` 可分别改为报告零值。
+- BME280 已关闭气压采样与补偿，因此对外温湿度字段与 AHT 一致。
 
-某个失败已显示在控制台后，下一次首次成功的重试会以普通控制台行显示，例如
-`TCA9548A SHT3X chamber: recovered`。该关联状态只保存在当前 Klipper 进程中：Klipper
-重启会创建新的传感器会话，不会延迟补发恢复消息。启动阶段的失败若在显示到控制台前
-已恢复，同样保持静默。
+#### 失败上限与报告
 
-每个可恢复环境传感器对象的状态均包括 `valid`、`communication_ok`、`last_error`、
+连续 15 次失败后，只有该传感器会在当前 Klipper 进程内停止采样，不再提交 I2C，也不会
+影响同一复用器的其他传感器。排除故障后执行 `FIRMWARE_RESTART` 重新初始化。
+`klippy.log` 会在第 5、10 次失败记录汇总，并在第 15 次记录最终停止。
+
+相同错误在 `klippy.log` 中会被限频。Fluidd/Mainsail 控制台会将失败阶段、I2C 状态和
+重试间隔显示为错误行，例如
+`TCA9548A BME280 chamber: measurement failed: START_NACK; retry in 60s`。已显示失败后，
+首次重试成功会显示 `recovered`。测量失败后若出现 `initialization failed`，表示驱动正在
+再次采样前重新初始化。
+
+Klipper 处于 shutdown 时，受支持传感器会立即停止且不再提交 I2C；待发送的控制台通知会被
+抑制，日志只记录一次停止。每个传感器状态包含 `valid`、`communication_ok`、`last_error`、
 `last_error_time`、`last_success_time`、`i2c_error_count`、`error_count`、
 `consecutive_failure_count`、`sampling_stopped`、`i2c_status_supported` 和
-`tca9548a_channel`。温度传感器对象可用时，这些字段也会加入关联的
-`temperature_sensor` 状态。
+`tca9548a_channel`。关联的 `temperature_sensor` 可用时也会包含这些字段。
 
-当前恢复机制只适用于上述 AHT、BME280、SHT3X 类型的 I2C 传输错误与损坏测量数据，
-不改变 PN532 或其他下游设备的错误语义。配置传感器的 `min_temp` 或 `max_temp` 违反
-仍属于普通 Klipper 安全停机。I2C 错误本身不会切换 TCA9548A `RST` 引脚、对下游设备
-发送复位或切断下游电源。配置了可选的 `reset_pin` 后，之后发生的 TCA 控制寄存器访问
-错误才可能触发前述复用器硬件恢复。
+#### 范围与地址
 
-若 TCA9548A 的 A0/A1/A2 上拉或下拉方式不同，请调整 `i2c_address`。默认 `112`
-即 `0x70`；Klipper 要求十进制 I2C 地址。AHT20 的 `0x38` 地址应写为 `56`，SHT3X 默认
-`0x44` 地址应写为 `68`。
+恢复机制只适用于受支持温湿度传感器，不改变其他下游 I2C 设备的错误语义。配置传感器的
+`min_temp` 或 `max_temp` 违反仍属于 Klipper 安全停机。传感器 I2C 错误本身不会切换 `RST`、
+复位下游设备或切断其供电；只有之后发生的 TCA 控制错误才可能使用前述可选复用器恢复。
 
+若 A0/A1/A2 并非全部为低，请修改默认 `112`（`0x70`）的 `i2c_address`。Klipper 使用十进制
+地址：AHT20 的 `0x38` 写为 `56`，默认 SHT3X 的 `0x44` 写为 `68`。
+
+<a id="debugging"></a>
 ## 调试
 
 仅测试复用器时，可启用：
@@ -472,12 +464,15 @@ TCA9548A 写入 `0x00`，在正常传感器初始化前关闭全部复用器通�
 化，使 Klipper 可以先进入 ready 状态后再手动测试复用器。正常配置应保持两个调试选项
 未设置。
 
-## 说明
+<a id="scope-and-limits"></a>
+## 范围与限制
 
-此原型刻意只支持有限的环境传感器。AHT 系列是 `tca9548a_drivers/aht.py` 中的独立驱动；
-BME280 和 SHT3X 当前包装系统已安装的 Klipper/Kalico 驱动。所有适配器都会在每次 I2C
-写入/读取前重新选择 TCA9548A 通道，避免在 reactor 暂停期间依赖之前的复用器状态。
+仅支持[配置](#configuration)中列出的五种温湿度传感器类型。AHT 系列使用
+`tca9548a_drivers/aht.py` 的独立驱动；BME280 和 SHT3X 使用系统已安装的
+Klipper/Kalico 驱动及本扩展的复用器传输层。所有适配器都会在每次 I2C 操作前重新选择
+TCA9548A 通道，避免在 reactor 暂停期间依赖之前的复用器状态。
 
+<a id="license"></a>
 ## 许可证
 
 本项目使用 GNU General Public License v3.0 或更高版本，详见 [LICENSE](LICENSE)。
