@@ -5,9 +5,24 @@ import logging
 from .. import sht3x, tca9548a
 from .recovery import EnvironmentRecoveryMixin
 
+SHT3X_FETCH_COMMAND = [0xE0, 0x00]
+
+
+def _sht3x_crc8(data):
+    """Calculate the SHT3X CRC for exactly one 16-bit measurement word."""
+    crc = 0xFF
+    for byte in ((data >> 8) & 0xFF, data & 0xFF):
+        crc ^= byte
+        for ignored in range(8):
+            if crc & 0x80:
+                crc = ((crc << 1) ^ 0x31) & 0xFF
+            else:
+                crc = (crc << 1) & 0xFF
+    return crc
+
 
 class SHT3XMeasurementError(Exception):
-    """The installed SHT3X driver stopped a sample without an I2C error."""
+    """The SHT3X returned an incomplete or unusable measurement."""
 
 
 class SHT3XTCA9548A(EnvironmentRecoveryMixin, sht3x.SHT3X):
@@ -95,19 +110,36 @@ class SHT3XTCA9548A(EnvironmentRecoveryMixin, sht3x.SHT3X):
         previous_values = (self.temp, self.humidity)
         self.i2c.clear_error()
         try:
-            result = super(SHT3XTCA9548A, self)._sample_sht3x(eventtime)
+            params = self.i2c.i2c_read(SHT3X_FETCH_COMMAND, 6)
+            if params is None:
+                raise SHT3XMeasurementError("empty I2C read response")
+            response = bytearray(params.get("response", []))
+            if len(response) != 6:
+                raise SHT3XMeasurementError(
+                    "expected 6 measurement bytes, received %d" % (
+                        len(response),))
+
+            raw_temperature = (response[0] << 8) | response[1]
+            raw_humidity = (response[3] << 8) | response[4]
+            if _sht3x_crc8(raw_temperature) != response[2]:
+                raise SHT3XMeasurementError("temperature checksum error")
+            if _sht3x_crc8(raw_humidity) != response[5]:
+                raise SHT3XMeasurementError("humidity checksum error")
+
+            self.temp = -45. + (175. * raw_temperature / 65535.)
+            self.humidity = 100. * raw_humidity / 65535.
         except Exception as exc:
             self.temp, self.humidity = previous_values
             self._record_failure("measurement", exc)
             return False
-        if result == self.reactor.NEVER:
-            # The native driver clears both values when an exception escapes.
-            # Restore them before applying the shared per-value error policy.
-            self.temp, self.humidity = previous_values
-            error = self.i2c.last_error or SHT3XMeasurementError(
-                "measurement did not complete")
-            self._record_failure("measurement", error)
-            return False
+
+        if self.temp < self.min_temp or self.temp > self.max_temp:
+            self.printer.invoke_shutdown(
+                "SHT3X temperature %0.1f outside range of %0.1f:%.01f" % (
+                    self.temp, self.min_temp, self.max_temp))
+        measured_time = self.reactor.monotonic()
+        print_time = self.i2c.get_mcu().estimated_print_time(measured_time)
+        self._callback(print_time, self.temp)
         self._record_success()
         return True
 

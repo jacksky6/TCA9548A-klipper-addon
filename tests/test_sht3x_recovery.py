@@ -38,8 +38,10 @@ class FakeMCU:
 class FakeTransferCommand:
     def __init__(self, responses):
         self.responses = list(responses)
+        self.calls = []
 
     def send(self, args, **kwargs):
+        self.calls.append((args, kwargs))
         return self.responses.pop(0)
 
 
@@ -208,6 +210,19 @@ def success(response=None):
     return {"i2c_bus_status": "SUCCESS", "response": response or []}
 
 
+def _sht3x_crc8(data):
+    crc = 0xFF
+    for byte in ((data >> 8) & 0xFF, data & 0xFF):
+        crc ^= byte
+        for ignored in range(8):
+            crc = ((crc << 1) ^ 0x31) & 0xFF if crc & 0x80 \
+                else (crc << 1) & 0xFF
+    return crc
+
+
+SHT_MEASUREMENT = [0x63, 0x79, 0x89, 0x70, 0xA3, 0x15]
+
+
 def _load_driver_modules():
     for name in list(sys.modules):
         if name == "klippy" or name.startswith("klippy."):
@@ -253,6 +268,9 @@ def _load_driver_modules():
                 self.reactor.monotonic()), self.temp)
             return eventtime + self.report_time
 
+        def _crc8(self, data):
+            return _sht3x_crc8(data)
+
         def setup_minmax(self, min_temp, max_temp):
             self.min_temp = min_temp
             self.max_temp = max_temp
@@ -296,10 +314,10 @@ class SHT3XRecoveryTests(unittest.TestCase):
     def test_failed_sample_retries_and_recovers(self):
         sensor, published = self._make_sensor([
             success(),
-            success([0] * 6),
+            success(SHT_MEASUREMENT),
             {"i2c_bus_status": "START_NACK", "response": []},
             success(),
-            success([0] * 6),
+            success(SHT_MEASUREMENT),
         ])
         sensor.handle_connect()
         sensor.handle_ready()
@@ -308,7 +326,8 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.reactor.now = 100.
         self.assertEqual(sensor._sample_sht3x(100.), 160.)
         self.assertFalse(sensor.valid)
-        self.assertEqual((sensor.temp, sensor.humidity), (23., 44.))
+        self.assertAlmostEqual(sensor.temp, 23., places=2)
+        self.assertAlmostEqual(sensor.humidity, 44., places=2)
         self.assertEqual(self.printer.gcode.raw_responses, [
             "!! TCA9548A SHT3X chamber: measurement failed: START_NACK; "
             "retry in 60s",
@@ -320,14 +339,32 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.assertEqual(self.printer.gcode.responses, [
             "TCA9548A SHT3X chamber: recovered",
         ])
-        self.assertEqual(published, [(0., 23.), (160., 23.)])
+        self.assertEqual([time for time, ignored in published], [0., 160.])
+        self.assertTrue(all(abs(value - 23.) < .01
+                            for ignored, value in published))
+
+    def test_failed_fetch_is_attempted_once_per_period(self):
+        sensor, _ = self._make_sensor([
+            success(),
+            success(SHT_MEASUREMENT),
+            {"i2c_bus_status": "START_NACK", "response": []},
+        ])
+        sensor.handle_connect()
+        raw_i2c = sensor.i2c.i2c
+
+        self.reactor.now = 100.
+        self.assertEqual(sensor._sample_sht3x(100.), 160.)
+
+        self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 3)
+        self.assertEqual(self.reactor.now, 100.)
+        self.assertFalse(raw_i2c.i2c_transfer_cmd.calls[-1][1]["retry"])
 
     def test_error_value_options_zero_only_selected_values(self):
         self.mux.zero_temperature_on_error = False
         self.mux.zero_humidity_on_error = True
         sensor, published = self._make_sensor([
             success(),
-            success([0] * 6),
+            success(SHT_MEASUREMENT),
             {"i2c_bus_status": "NACK", "response": []},
         ])
         sensor.handle_connect()
@@ -335,14 +372,16 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.reactor.now = 20.
         sensor._sample_sht3x(20.)
 
-        self.assertEqual((sensor.temp, sensor.humidity), (23., 0.))
-        self.assertEqual(published, [(0., 23.)])
+        self.assertAlmostEqual(sensor.temp, 23., places=2)
+        self.assertEqual(sensor.humidity, 0.)
+        self.assertEqual(len(published), 1)
+        self.assertAlmostEqual(published[0][1], 23., places=2)
 
     def test_initialization_failure_retries_without_shutdown(self):
         sensor, published = self._make_sensor([
             {"i2c_bus_status": "NACK", "response": []},
             success(),
-            success([0] * 6),
+            success(SHT_MEASUREMENT),
         ])
 
         sensor.handle_connect()
@@ -354,12 +393,14 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.reactor.now = 30.
         self.assertGreater(sensor._sample_sht3x(30.), 30.)
         self.assertTrue(sensor.valid)
-        self.assertEqual(published, [(30., 23.)])
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][0], 30.)
+        self.assertAlmostEqual(published[0][1], 23., places=2)
 
     def test_malformed_sample_retries_without_losing_valid_values(self):
         sensor, published = self._make_sensor([
             success(),
-            success([0] * 6),
+            success(SHT_MEASUREMENT),
             success([255]),
         ])
         sensor.handle_connect()
@@ -368,9 +409,23 @@ class SHT3XRecoveryTests(unittest.TestCase):
         self.assertEqual(sensor._sample_sht3x(20.), 80.)
 
         self.assertFalse(sensor.valid)
-        self.assertEqual((sensor.temp, sensor.humidity), (23., 44.))
-        self.assertEqual(sensor.last_error["type"], "ValueError")
-        self.assertEqual(published, [(0., 23.)])
+        self.assertAlmostEqual(sensor.temp, 23., places=2)
+        self.assertAlmostEqual(sensor.humidity, 44., places=2)
+        self.assertEqual(sensor.last_error["type"], "SHT3XMeasurementError")
+        self.assertEqual(len(published), 1)
+        self.assertAlmostEqual(published[0][1], 23., places=2)
+
+    def test_initialization_and_sampling_disable_host_retries(self):
+        sensor, _ = self._make_sensor([
+            success(),
+            success(SHT_MEASUREMENT),
+        ])
+
+        sensor.handle_connect()
+
+        calls = sensor.i2c.i2c.i2c_transfer_cmd.calls
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call[1]["retry"] is False for call in calls))
 
     def test_stopped_sensor_does_not_schedule_another_sample(self):
         sensor, _ = self._make_sensor([])

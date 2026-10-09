@@ -285,6 +285,7 @@ class RecoverableTransportTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status, "START_NACK")
         self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 1)
+        self.assertFalse(raw_i2c.i2c_transfer_cmd.calls[0][1]["retry"])
 
     def test_missing_i2c_response_is_returned_as_recoverable_error(self):
         raw_i2c = FakeModernI2C([
@@ -298,6 +299,7 @@ class RecoverableTransportTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, "NO_RESPONSE")
         self.assertIn("did not return i2c_response", str(raised.exception))
         self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 1)
+        self.assertFalse(raw_i2c.i2c_transfer_cmd.calls[0][1]["retry"])
 
     def test_legacy_write_uses_old_signature(self):
         raw_i2c = FakeLegacyI2C()
@@ -873,6 +875,26 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertEqual(sensor.last_error["i2c_bus_status"], "NO_RESPONSE")
         self.assertEqual(sensor.last_error["type"], "I2CResponseError")
         self.assertEqual(self.printer.shutdowns, [])
+
+    def test_busy_measurement_is_skipped_without_repeating_or_soft_reset(self):
+        raw_i2c = FakeModernI2C([
+            success(),                         # measurement command
+            success([0x80, 0, 0, 0, 0, 0]),   # busy response
+        ])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+        sensor.init_sent = True
+
+        with self.mux.session():
+            self.assertFalse(sensor._make_measurement("measurement"))
+
+        self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 2)
+        self.assertEqual(self.reactor.now, .110)
+        self.assertEqual(sensor.last_error["message"],
+                         "device remained busy after measurement")
+        self.assertTrue(all(
+            call[1]["retry"] is False
+            for call in raw_i2c.i2c_transfer_cmd.calls))
 
     def test_failed_sample_can_zero_values_without_range_shutdown(self):
         raw_i2c = FakeModernI2C([

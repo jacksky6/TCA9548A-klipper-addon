@@ -124,7 +124,7 @@ def _legacy_i2c_write(i2c, data, minclock, reqclock, retry):
 
 
 def i2c_transfer_recoverable(i2c, write, read_len=0, minclock=0,
-                             reqclock=0, retry=True, operation="transfer"):
+                             reqclock=0, retry=False, operation="transfer"):
     """Perform one transfer without bus.py escalating a reported error.
 
     Modern MCU firmware returns i2c_bus_status in i2c_response. Klipper's
@@ -826,7 +826,7 @@ class RecoverableMuxedI2C(MuxedI2C):
         self.last_error = None
 
     def _transfer(self, write, read_len=0, minclock=0, reqclock=0,
-                  retry=True, operation="transfer"):
+                  retry=False, operation="transfer"):
         if not self._select_locked():
             error = MuxSelectionError(self.mux.name, self.channel)
             self.last_error = error
@@ -839,16 +839,16 @@ class RecoverableMuxedI2C(MuxedI2C):
             self.last_error = exc
             raise
 
-    def i2c_write(self, data, minclock=0, reqclock=0, retry=True):
+    def i2c_write(self, data, minclock=0, reqclock=0, retry=False):
         self._transfer(data, minclock=minclock, reqclock=reqclock,
                        retry=retry, operation="write")
 
-    def i2c_read(self, write, read_len, retry=True):
+    def i2c_read(self, write, read_len, retry=False):
         return self._transfer(write, read_len, retry=retry,
                               operation="read")
 
     def i2c_transfer(self, write, read_len=0, minclock=0, reqclock=0,
-                     retry=True):
+                     retry=False):
         return self._transfer(write, read_len, minclock, reqclock, retry)
 
 

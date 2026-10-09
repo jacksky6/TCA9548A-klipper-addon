@@ -8,13 +8,11 @@ from .recovery import EnvironmentRecoveryMixin
 I2C_ADDR = 0x38
 
 CMD_MEASURE = [0xAC, 0x33, 0x00]
-CMD_RESET = [0xBA]
 CMD_INIT_AHT1X = [0xE1, 0x08, 0x00]
 CMD_INIT_AHT2X = [0xBE, 0x08, 0x00]
 
 STATUS_BUSY = 0x80
 STATUS_CALIBRATED = 0x08
-MAX_BUSY_CYCLES = 5
 
 
 class AHTMeasurementError(Exception):
@@ -117,11 +115,6 @@ class AHTBase(EnvironmentRecoveryMixin):
                      self.humidity)
         return True
 
-    def _soft_reset(self):
-        logging.info("%s %s: performing soft reset", self.model, self.name)
-        self.i2c.i2c_write(CMD_RESET)
-        self.reactor.pause(self.reactor.monotonic() + .020)
-
     def _make_measurement(self, stage):
         if not self.init_sent:
             self._record_failure(
@@ -129,36 +122,32 @@ class AHTBase(EnvironmentRecoveryMixin):
             return False
 
         try:
-            for cycle in range(MAX_BUSY_CYCLES + 1):
-                self.i2c.i2c_write(CMD_MEASURE)
-                # AHTxx needs at least 75ms; retain Klipper's 110ms delay.
-                self.reactor.pause(self.reactor.monotonic() + .110)
-                params = self.i2c.i2c_read([], 6)
-                if params is None:
-                    raise AHTMeasurementError("empty I2C read response")
-                data = bytearray(params.get("response", []))
-                if len(data) != 6:
-                    raise AHTMeasurementError(
-                        "expected 6 measurement bytes, received %d" % (
-                            len(data),))
+            self.i2c.i2c_write(CMD_MEASURE)
+            # AHTxx needs at least 75ms; retain Klipper's 110ms delay.
+            self.reactor.pause(self.reactor.monotonic() + .110)
+            params = self.i2c.i2c_read([], 6)
+            if params is None:
+                raise AHTMeasurementError("empty I2C read response")
+            data = bytearray(params.get("response", []))
+            if len(data) != 6:
+                raise AHTMeasurementError(
+                    "expected 6 measurement bytes, received %d" % (
+                        len(data),))
 
-                self.is_calibrated = bool(data[0] & STATUS_CALIBRATED)
-                if data[0] & STATUS_BUSY:
-                    continue
+            self.is_calibrated = bool(data[0] & STATUS_CALIBRATED)
+            if data[0] & STATUS_BUSY:
+                raise AHTMeasurementError(
+                    "device remained busy after measurement")
 
-                temp_raw = ((data[3] & 0x0F) << 16) | \
-                    (data[4] << 8) | data[5]
-                humidity_raw = (data[1] << 12) | (data[2] << 4) | \
-                    (data[3] >> 4)
-                self.temp = ((temp_raw * 200.0) / 1048576.0) - 50.0
-                self.humidity = min(
-                    100., max(0., (humidity_raw * 100.0) / 1048576.0))
-                self._record_success()
-                return True
-            self._soft_reset()
-            raise AHTMeasurementError(
-                "device remained busy after %d measurements" % (
-                    MAX_BUSY_CYCLES + 1,))
+            temp_raw = ((data[3] & 0x0F) << 16) | \
+                (data[4] << 8) | data[5]
+            humidity_raw = (data[1] << 12) | (data[2] << 4) | \
+                (data[3] >> 4)
+            self.temp = ((temp_raw * 200.0) / 1048576.0) - 50.0
+            self.humidity = min(
+                100., max(0., (humidity_raw * 100.0) / 1048576.0))
+            self._record_success()
+            return True
         except Exception as exc:
             self._record_failure(stage, exc)
             return False

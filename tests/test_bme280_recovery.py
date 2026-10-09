@@ -38,8 +38,10 @@ class FakeMCU:
 class FakeTransferCommand:
     def __init__(self, responses):
         self.responses = list(responses)
+        self.calls = []
 
     def send(self, args, **kwargs):
+        self.calls.append((args, kwargs))
         return self.responses.pop(0)
 
 
@@ -368,6 +370,18 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertEqual(status["consecutive_failure_count"], 0)
         self.assertFalse(status["sampling_stopped"])
         self.assertNotIn("pressure", status)
+
+    def test_initialization_and_sampling_disable_host_retries(self):
+        sensor, _ = self._make_sensor([
+            success(),
+            success([0] * 5),
+        ])
+
+        sensor.handle_connect()
+
+        calls = sensor.i2c.i2c.i2c_transfer_cmd.calls
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call[1]["retry"] is False for call in calls))
 
     def test_stopped_sensor_does_not_schedule_another_sample(self):
         sensor, _ = self._make_sensor([])
