@@ -83,13 +83,9 @@ class I2CResponseError(I2CStatusError):
     """The MCU accepted an I2C query but did not return its response."""
 
     def __init__(self, i2c, operation, write_len, read_len, cause):
+        I2CStatusError.__init__(self, i2c, "NO_RESPONSE", operation,
+                                write_len, read_len)
         self.cause = cause
-        self.status = "NO_RESPONSE"
-        self.operation = operation
-        self.write_len = write_len
-        self.read_len = read_len
-        self.i2c_address = i2c.get_i2c_address()
-        self.mcu_name = i2c.get_mcu().get_name()
         Exception.__init__(
             self, "MCU '%s' did not return i2c_response during %s: %s" % (
                 self.mcu_name, operation, cause))
@@ -133,8 +129,10 @@ def i2c_transfer_recoverable(i2c, write, read_len=0, minclock=0,
 
     Modern MCU firmware returns i2c_bus_status in i2c_response. Klipper's
     public MCU_I2C methods convert a non-success status into shutdown, so
-    callers that can recover must issue the query command directly. Legacy
-    firmware has no recoverable status path and retains its native behavior.
+    callers that can recover must issue the query command directly. A missing
+    query response is normalized to I2CResponseError for the same recovery
+    path. Legacy firmware has no recoverable status path and retains its
+    native behavior.
     """
     write = list(write)
     if not i2c_status_supported(i2c):

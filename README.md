@@ -101,11 +101,14 @@ pulse to verify that the hardware reset cleared every channel. On legacy I2C
 firmware it sends the hardware pulse without an I2C verification, because an
 unsuccessful legacy verification can shut down the MCU firmware.
 
-When `reset_pin` is configured and the modern I2C protocol reports any error
-while accessing the TCA control register itself, the add-on automatically
-pulses the reset pin, verifies the all-channels-disabled state, and retries the
-original TCA control operation once. Automatic attempts are limited to one per
-30 seconds by default. A downstream device error, such as a sensor
+When `reset_pin` is configured and the modern I2C protocol returns an error
+while accessing the TCA control register itself, or the host cannot obtain its
+`i2c_response`, the add-on automatically pulses the reset pin, verifies the
+all-channels-disabled state, and retries the original TCA control operation
+once. A missing response is reported as `NO_RESPONSE`; it means the MCU did
+not return the query result, not that it returned an I2C bus status. Automatic
+attempts are limited to one per 30 seconds by default. A downstream device
+error, such as a sensor
 `START_NACK`, does not directly reset the TCA; it remains a sensor retry. If
 that fault later
 prevents access to the TCA control register, the resulting TCA error triggers
@@ -117,10 +120,13 @@ to a stuck bus.
 After five consecutive automatic reset attempts fail verification, the mux
 stops all automatic TCA and downstream I2C activity. The Console identifies
 the final verification failure and advises checking `RESET#` wiring and TCA
-power. After repairing the fault, run `TCA_RESET MUX=mux1`; power-cycle the
-printer if that reset still cannot be verified. A verified reset or successful
-TCA control access clears the consecutive-failure count. A downstream sensor
-error alone does not count toward this limit.
+power. A reset pulse may recover an I2C controller stuck by a downstream
+fault only while the MCU command channel can still accept the GPIO command. It
+cannot restore a disconnected or shutdown MCU. After repairing the fault, run
+`TCA_RESET MUX=mux1`; power-cycle the printer if that reset still cannot be
+verified. A verified reset or successful TCA control access clears the
+consecutive-failure count. A downstream sensor error alone does not count
+toward this limit.
 
 The Console reports an automatic attempt as a short red error line, for
 example `TCA9548A mux1: BUS_TIMEOUT; hardware reset`, followed by a normal
@@ -181,9 +187,11 @@ newer matching host and MCU firmware. The result has two distinct levels:
   drivers can receive I2C
   `NACK`, `START_NACK`, `START_READ_NACK`, and `BUS_TIMEOUT` statuses in the
   host instead of using Klipper's public I2C helper that turns those statuses
-  into a host shutdown. The relevant MCU must still be rebuilt and flashed
-  from matching modern firmware. The driver's `i2c_status_supported` status
-  field shows the final runtime result for the configured MCU.
+  into a host shutdown. A query that receives no `i2c_response` is also
+  contained by the add-on and reported as `NO_RESPONSE`; it is not a returned
+  I2C bus status. The relevant MCU must still be rebuilt and flashed from
+  matching modern firmware. The driver's `i2c_status_supported` status field
+  shows the final runtime result for the configured MCU.
 - **Legacy host source:** legacy MCU firmware calls its own `shutdown()` for
   these I2C failures before any Python driver can handle them. The add-on is
   compatible with that source, but cannot guarantee that a missing or failed
