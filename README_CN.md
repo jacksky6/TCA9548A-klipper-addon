@@ -61,6 +61,8 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
 environment_report_time: 60
+# 可选：在打印中的 AFC/Happy Hare 动作期间跳过环境传感器采样。
+# pause_env_on_toolchange: True
 # zero_temperature_on_error: False
 # zero_humidity_on_error: False
 
@@ -241,6 +243,9 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70，A0/A1/A2 均为低；0x71-0x77 使用 113-119
 environment_report_time: 60
+# 可选：打印中 AFC 或 Happy Hare 换料动作期间跳过环境传感器采样。
+# Klipper ready 后延迟 30 秒检测一次。
+# pause_env_on_toolchange: True
 # 受支持环境传感器通信失败时，将相应值显示为 0，而非保留最后一次有效值。
 # 只能在此复用器段设置，不能写入 [temperature_sensor] 段。
 # zero_temperature_on_error: False
@@ -319,6 +324,13 @@ max_temp: 80
 TCA9548A AHT 传感器段刻意不支持 `aht10_report_time`；请在复用器段设置共享轮询间隔，
 以便一起调度所有通道。`BME280_TCA9548A` 不支持单传感器 `bme280_report_time`，
 `SHT3X_TCA9548A` 也使用复用器间隔，不支持单传感器 `sht3x_report_time`。
+
+`pause_env_on_toolchange` 默认为 `False`。设为 `True` 后，扩展会在 Klipper
+ready 30 秒后一次性检测已加载的 AFC 和 Happy Hare 对象，并将结果记录到
+`klippy.log`。打印进行时，AFC 的 `current_state` 或 Happy Hare 的 `action`
+只要不是 `Idle`，就会在选中 TCA 通道和提交 I2C 前跳过该次环境传感器采样。
+多色系统处于 `Idle` 的正常打印，以及所有非打印操作，仍会正常采样。AFC 未提供
+`current_state`、Happy Hare 未提供 `action`，或未检测到多色系统时，仍会正常采样。
 
 `zero_temperature_on_error` 和 `zero_humidity_on_error` 是 AHT、BME280 和 SHT3X
 通信失败时的可选布尔设置，默认均为 `False`，分别保留温度或湿度的最后一次有效值。将其中

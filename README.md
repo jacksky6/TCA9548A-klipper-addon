@@ -74,6 +74,7 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112
 environment_report_time: 60
+# pause_env_on_toolchange: True  # Optional: skip samples during AFC/Happy Hare actions.
 # zero_temperature_on_error: False
 # zero_humidity_on_error: False
 
@@ -300,6 +301,9 @@ i2c_mcu: EMU_1
 i2c_bus: i2c1_PB6_PB7
 i2c_address: 112 # 0x70, A0/A1/A2 all low; use 113-119 for 0x71-0x77
 environment_report_time: 60
+# Optional: skip environment samples while AFC or Happy Hare changes filament
+# during a print. Detection runs once 30 seconds after Klipper is ready.
+# pause_env_on_toolchange: True
 # On a failed supported environment sensor transfer, show zero instead of the
 # last valid value.
 # Set these only here, not in a [temperature_sensor] section.
@@ -384,6 +388,15 @@ polling interval on the mux so all lanes can be scheduled together.
 `BME280_TCA9548A` follows the same rule and does not support per-sensor
 `bme280_report_time`. `SHT3X_TCA9548A` also uses the mux interval and does not
 support per-sensor `sht3x_report_time`.
+
+`pause_env_on_toolchange` defaults to `False`. When set to `True`, the add-on
+waits 30 seconds after Klipper is ready, then detects loaded AFC and Happy Hare
+objects once and records the result in `klippy.log`. While a print is active,
+an AFC `current_state` or Happy Hare `action` other than `Idle` skips that
+environment sensor interval before selecting a TCA channel or submitting I2C.
+Normal printing with the multicolor system idle, and all non-print activity,
+continue sampling. AFC versions without `current_state`, Happy Hare versions
+without `action`, or no detected multicolor system continue sampling.
 
 `zero_temperature_on_error` and `zero_humidity_on_error` are optional Boolean
 settings for AHT, BME280, and SHT3X communication failures. Both default to
