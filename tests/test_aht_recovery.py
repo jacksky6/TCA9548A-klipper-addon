@@ -286,6 +286,19 @@ class RecoverableTransportTests(unittest.TestCase):
         self.assertEqual(raised.exception.status, "START_NACK")
         self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 1)
 
+    def test_missing_i2c_response_is_returned_as_recoverable_error(self):
+        raw_i2c = FakeModernI2C([
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+        ])
+
+        with self.assertRaises(self.core.I2CResponseError) as raised:
+            self.core.i2c_transfer_recoverable(raw_i2c, [0xAC],
+                                                operation="measurement")
+
+        self.assertEqual(raised.exception.status, "NO_RESPONSE")
+        self.assertIn("did not return i2c_response", str(raised.exception))
+        self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 1)
+
     def test_legacy_write_uses_old_signature(self):
         raw_i2c = FakeLegacyI2C()
 
@@ -616,6 +629,53 @@ class TcaResetTests(unittest.TestCase):
             "TCA9548A mux0: reset verified; retrying",
         ])
 
+    def test_tca_no_response_automatically_resets_and_retries_once(self):
+        mux = self._make_mux(responses=[
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+            success([0]),
+            success(),
+        ])
+
+        self.assertTrue(mux._write_control_locked(0x04))
+
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.last_control, 0x04)
+        self.assertEqual(mux.gcode.raw_responses, [
+            "!! TCA9548A mux0: NO_RESPONSE; hardware reset",
+        ])
+
+    def test_no_response_during_reset_verification_pauses_without_escaping(self):
+        mux = self._make_mux(responses=[
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+        ])
+
+        self.assertFalse(mux._write_control_locked(0x04))
+
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.auto_reset_failure_count, 1)
+        self.assertEqual(mux.last_reset_result,
+                         "verification failed: NO_RESPONSE")
+        self.assertAlmostEqual(mux._get_i2c_pause_remaining(), 60.)
+        self.assertIsNone(mux.last_control)
+        self.assertIsNone(mux.last_channel)
+
+    def test_no_response_during_session_cleanup_does_not_escape(self):
+        mux = self._make_mux(responses=[
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+        ])
+        mux._session_owner = None
+        mux._session_depth = 0
+
+        with mux.session(close_on_exit=True):
+            pass
+
+        self.assertEqual(mux.reset_count, 1)
+        self.assertIsNone(mux.last_control)
+        self.assertIsNone(mux.last_channel)
+
     def test_tca_control_read_error_resets_and_retries_once(self):
         mux = self._make_mux(responses=[
             {"i2c_bus_status": "NACK", "response": []},
@@ -794,6 +854,24 @@ class AHTRecoveryTests(unittest.TestCase):
         self.assertTrue(sensor.init_sent)
         self.assertEqual(sensor.consecutive_failure_count, 0)
         self.assertGreater(next_waketime, retry_at)
+        self.assertEqual(self.printer.shutdowns, [])
+
+    def test_missing_i2c_response_is_recorded_as_sensor_failure(self):
+        raw_i2c = FakeModernI2C([
+            RuntimeError("Unable to obtain 'i2c_response' response"),
+        ])
+        self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
+        sensor = self.aht.AHT2x(self.config)
+
+        with self.mux.session():
+            self.assertFalse(sensor._initialize_sensor())
+
+        self.assertFalse(sensor.valid)
+        self.assertFalse(sensor.communication_ok)
+        self.assertEqual(sensor.i2c_error_count, 1)
+        self.assertEqual(sensor.consecutive_failure_count, 1)
+        self.assertEqual(sensor.last_error["i2c_bus_status"], "NO_RESPONSE")
+        self.assertEqual(sensor.last_error["type"], "I2CResponseError")
         self.assertEqual(self.printer.shutdowns, [])
 
     def test_failed_sample_can_zero_values_without_range_shutdown(self):

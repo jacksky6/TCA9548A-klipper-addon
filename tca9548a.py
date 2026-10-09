@@ -79,6 +79,22 @@ class I2CStatusError(Exception):
                              operation))
 
 
+class I2CResponseError(I2CStatusError):
+    """The MCU accepted an I2C query but did not return its response."""
+
+    def __init__(self, i2c, operation, write_len, read_len, cause):
+        self.cause = cause
+        self.status = "NO_RESPONSE"
+        self.operation = operation
+        self.write_len = write_len
+        self.read_len = read_len
+        self.i2c_address = i2c.get_i2c_address()
+        self.mcu_name = i2c.get_mcu().get_name()
+        Exception.__init__(
+            self, "MCU '%s' did not return i2c_response during %s: %s" % (
+                self.mcu_name, operation, cause))
+
+
 class MuxSelectionError(Exception):
     """A downstream operation could not select its TCA9548A channel."""
 
@@ -127,9 +143,14 @@ def i2c_transfer_recoverable(i2c, write, read_len=0, minclock=0,
         _legacy_i2c_write(i2c, write, minclock, reqclock, retry)
         return None
 
-    params = i2c.i2c_transfer_cmd.send(
-        [i2c.get_oid(), write, read_len], minclock=minclock,
-        reqclock=reqclock, retry=retry)
+    try:
+        params = i2c.i2c_transfer_cmd.send(
+            [i2c.get_oid(), write, read_len], minclock=minclock,
+            reqclock=reqclock, retry=retry)
+    except Exception as exc:
+        if "Unable to obtain 'i2c_response' response" not in str(exc):
+            raise
+        raise I2CResponseError(i2c, operation, len(write), read_len, exc)
     if params is None:
         raise I2CStatusError(i2c, "MALFORMED_RESPONSE", operation,
                              len(write), read_len)
