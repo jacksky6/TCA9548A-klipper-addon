@@ -390,10 +390,9 @@ TCA_STATUS MUX=mux1
 <a id="environment-recovery"></a>
 ### 环境传感器 I2C 恢复
 
-`AHT1X_TCA9548A`、`AHT2X_TCA9548A`、`AHT3X_TCA9548A` 和
-`BME280_TCA9548A` 使用 `tca9548a_drivers/` 中的独立驱动。`SHT3X_TCA9548A` 暂时保留系统
-已安装 Klipper/Kalico 中适用的初始化流程，并使用扩展提供的采样、恢复控制与同一可恢复
-复用器传输层。无需修改 Klipper/Kalico 本身。
+所有受支持传感器都使用 `tca9548a_drivers/` 中的独立驱动，由本插件负责初始化、采样和
+恢复。它们共享同一复用器传输层，自动识别 Klipper/Kalico 的新版或旧版 I2C 接口。
+不继承系统已安装的传感器驱动，也无需修改 Klipper/Kalico 本身。
 
 #### 采样与重试
 
@@ -467,9 +466,8 @@ TCA9548A 写入 `0x00`，在正常传感器初始化前关闭全部复用器通�
 <a id="scope-and-limits"></a>
 ## 范围与限制
 
-仅支持[配置](#configuration)中列出的五种温湿度传感器类型。AHT 系列和 BME280 使用
-`tca9548a_drivers/` 中的独立驱动；SHT3X 使用系统已安装的
-Klipper/Kalico 驱动及本扩展的复用器传输层。所有适配器都会在每次 I2C 操作前重新选择
+仅支持[配置](#configuration)中列出的五种温湿度传感器类型。它们都使用
+`tca9548a_drivers/` 中的独立驱动及本扩展的复用器传输层。所有适配器都会在每次 I2C 操作前重新选择
 TCA9548A 通道，避免在 reactor 暂停期间依赖之前的复用器状态。
 
 <a id="license"></a>
