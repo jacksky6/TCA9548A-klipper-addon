@@ -387,8 +387,8 @@ sections do not support them. A failure-generated zero is not checked against
 `min_temp` or `max_temp`.
 
 At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
-same mux are spread evenly across `environment_report_time` so their periodic
-polls do not all run at the same instant.
+same mux are spread evenly across `environment_report_time` by one shared
+scheduler, which keeps their periodic polls from drifting together.
 
 <a id="operation"></a>
 ## Operation

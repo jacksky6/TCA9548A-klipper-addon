@@ -88,7 +88,10 @@ class BME280TCA9548A(EnvironmentRecoveryMixin):
         self.dig = None
         self._initialized = False
         self._callback = None
-        self.sample_timer = self.reactor.register_timer(self._sample_bme280)
+        uses_scheduler = getattr(
+            self._mux, "uses_environment_scheduler", lambda: False)()
+        self.sample_timer = (None if uses_scheduler else
+                             self.reactor.register_timer(self._sample_bme280))
         self._init_environment_recovery()
         self.printer.add_object("bme280 " + self.name, self)
         self.printer.register_event_handler("klippy:connect",
@@ -99,6 +102,8 @@ class BME280TCA9548A(EnvironmentRecoveryMixin):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        if getattr(self._mux, "uses_environment_scheduler", lambda: False)():
+            return
         if (self._sampling_stopped()
                 or self._stop_sampling_if_printer_shutdown()):
             return
@@ -190,6 +195,9 @@ class BME280TCA9548A(EnvironmentRecoveryMixin):
         if not success:
             return eventtime + self.report_time
         return self.reactor.monotonic() + self.report_time
+
+    def sample_environment(self, eventtime):
+        return self._sample_bme280(eventtime)
 
     def _sample_initialized(self):
         previous_values = (self.temp, self.humidity)

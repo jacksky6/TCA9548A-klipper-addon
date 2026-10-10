@@ -59,7 +59,10 @@ class AHTBase(EnvironmentRecoveryMixin):
             self._mux, self._mux_channel, raw_i2c)
         self.report_time = self._mux.environment_report_time
         self.temp = self.min_temp = self.max_temp = self.humidity = 0.
-        self.sample_timer = self.reactor.register_timer(self._sample_aht)
+        uses_scheduler = getattr(
+            self._mux, "uses_environment_scheduler", lambda: False)()
+        self.sample_timer = (None if uses_scheduler else
+                             self.reactor.register_timer(self._sample_aht))
         self.is_calibrated = False
         self.init_sent = False
         self._callback = None
@@ -76,6 +79,8 @@ class AHTBase(EnvironmentRecoveryMixin):
 
     def handle_connect(self):
         self._patch_temperature_sensor_status()
+        if getattr(self._mux, "uses_environment_scheduler", lambda: False)():
+            return
         if (self._sampling_stopped()
                 or self._stop_sampling_if_printer_shutdown()):
             return
@@ -180,6 +185,11 @@ class AHTBase(EnvironmentRecoveryMixin):
                     self.model.upper(), self.temp, self.min_temp,
                     self.max_temp))
         return self._publish_sample()
+
+    def sample_environment(self, eventtime):
+        if self._debug_skip_init:
+            return self.reactor.NEVER
+        return self._sample_aht(eventtime)
 
     def _publish_sample(self):
         measured_time = self.reactor.monotonic()

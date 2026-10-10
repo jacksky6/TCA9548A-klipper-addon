@@ -276,7 +276,13 @@ class TCA9548A:
         self._session_depth = 0
         self.environment_sensors = []
         self.environment_schedule = {}
+        self.environment_schedule_order = []
         self.environment_schedule_ready = False
+        self._environment_scheduler_timer = self.reactor.register_timer(
+            self._run_environment_scheduler)
+        self._environment_scheduler_epoch = None
+        self._environment_scheduler_index = 0
+        self._environment_scheduler_cycle = 0
         self.manual_environment_sampling_paused = False
         self._print_stats = None
         self._afc = None
@@ -312,6 +318,12 @@ class TCA9548A:
         if not self.debug_no_disable:
             self.disable_all()
         self._build_environment_schedule()
+        self._environment_scheduler_epoch = self.reactor.monotonic()
+        self._environment_scheduler_index = 0
+        self._environment_scheduler_cycle = 0
+        self.reactor.update_timer(
+            self._environment_scheduler_timer,
+            self._next_environment_waketime())
 
     def _handle_ready(self):
         self.reactor.update_timer(
@@ -378,10 +390,14 @@ class TCA9548A:
         self.environment_sensors.append((channel, sensor.name, sensor))
         self.environment_schedule_ready = False
 
+    def uses_environment_scheduler(self):
+        return True
+
     def _build_environment_schedule(self):
         if self.environment_schedule_ready:
             return
         self.environment_schedule.clear()
+        self.environment_schedule_order = []
         # A stable sort keeps the staggered schedule predictable across
         # restarts and spreads devices uniformly over one report interval.
         sensors = sorted(self.environment_sensors, key=lambda s: (s[0], s[1]))
@@ -399,15 +415,63 @@ class TCA9548A:
         for index, (channel, sensor_name, sensor) in enumerate(sensors):
             offset = slot_width * (index + 1)
             self.environment_schedule[sensor] = offset
+            self.environment_schedule_order.append(sensor)
             logging.info("TCA9548A '%s': environment schedule %s channel=%d "
                          "initial_delay=%.3fs",
                          self.name, sensor_name, channel, offset)
         self.environment_schedule_ready = True
 
+    def _next_environment_waketime(self):
+        self._build_environment_schedule()
+        if not self.environment_schedule_order:
+            return self.reactor.NEVER
+        if self._environment_scheduler_epoch is None:
+            self._environment_scheduler_epoch = self.reactor.monotonic()
+        sensor = self.environment_schedule_order[self._environment_scheduler_index]
+        offset = self.environment_schedule[sensor]
+        return (self._environment_scheduler_epoch
+                + self._environment_scheduler_cycle
+                * self.environment_report_time + offset)
+
+    def _advance_environment_scheduler(self):
+        self._environment_scheduler_index += 1
+        if (self._environment_scheduler_index >=
+                len(self.environment_schedule_order)):
+            self._environment_scheduler_index = 0
+            self._environment_scheduler_cycle += 1
+
+    def _run_environment_scheduler(self, eventtime):
+        if self.printer.is_shutdown():
+            return self.reactor.NEVER
+        self._build_environment_schedule()
+        sensors = self.environment_schedule_order
+        if not sensors:
+            return self.reactor.NEVER
+        sensor = sensors[self._environment_scheduler_index]
+        try:
+            sensor.sample_environment(eventtime)
+        except Exception:
+            logging.exception("TCA9548A '%s': environment scheduler failed "
+                              "for %s", self.name, sensor.name)
+        self._advance_environment_scheduler()
+        next_waketime = self._next_environment_waketime()
+        now = self.reactor.monotonic()
+        while next_waketime <= now:
+            self._advance_environment_scheduler()
+            next_waketime = self._next_environment_waketime()
+        return next_waketime
+
     def get_environment_waketime(self, sensor):
         self._build_environment_schedule()
+        if self._environment_scheduler_epoch is None:
+            return self.reactor.monotonic() + self.environment_schedule.get(
+                sensor, 0.)
         offset = self.environment_schedule.get(sensor, 0.)
-        return self.reactor.monotonic() + offset
+        now = self.reactor.monotonic()
+        cycle = max(0, int((now - self._environment_scheduler_epoch - offset)
+                           // self.environment_report_time) + 1)
+        return (self._environment_scheduler_epoch
+                + cycle * self.environment_report_time + offset)
 
     def _write_control_locked(self, value, allow_auto_reset=True):
         if self._automatic_recovery_stopped():

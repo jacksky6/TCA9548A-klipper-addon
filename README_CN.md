@@ -332,8 +332,8 @@ ready 30 秒后一次性检测已加载的 AFC 和 Happy Hare 对象，并将结
 `[tca9548a ...]` 复用器段，不支持在单独的 `[temperature_sensor ...]` 段设置。由失败
 产生的零值不会参与 `min_temp` 或 `max_temp` 检查。
 
-Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器会在
-`environment_report_time` 内均匀错开，避免周期轮询集中在同一时刻。
+Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器由一个共享
+调度器在 `environment_report_time` 内均匀错开，避免长期运行后周期轮询逐渐集中到同一时刻。
 
 <a id="operation"></a>
 ## 运行

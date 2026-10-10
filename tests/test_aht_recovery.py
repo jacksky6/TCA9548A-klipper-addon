@@ -969,6 +969,48 @@ class TcaResetTests(unittest.TestCase):
 
         self.assertTrue(mux.should_pause_environment_sampling(0.))
 
+    def test_environment_scheduler_keeps_fixed_slots_after_slow_sample(self):
+        class ScheduledSensor:
+            def __init__(self, name, elapsed=0.):
+                self.name = name
+                self.elapsed = elapsed
+                self.calls = []
+
+            def sample_environment(self, eventtime):
+                self.calls.append(eventtime)
+                self.reactor.now += self.elapsed
+
+        mux = self._make_mux()
+        mux.printer = mock.Mock()
+        mux.printer.is_shutdown.return_value = False
+        mux.environment_sensors = []
+        mux.environment_schedule = {}
+        mux.environment_schedule_order = []
+        mux.environment_schedule_ready = False
+        mux._environment_scheduler_epoch = 100.
+        mux._environment_scheduler_index = 0
+        mux._environment_scheduler_cycle = 0
+        first = ScheduledSensor("first", elapsed=20.)
+        second = ScheduledSensor("second")
+        first.reactor = second.reactor = self.reactor
+        mux.environment_sensors = [(0, first.name, first),
+                                   (1, second.name, second)]
+
+        mux._build_environment_schedule()
+        self.assertEqual(mux._next_environment_waketime(), 130.)
+
+        self.reactor.now = 130.
+        self.assertEqual(mux._run_environment_scheduler(130.), 160.)
+        self.assertEqual(first.calls, [130.])
+
+        self.reactor.now = 160.
+        self.assertEqual(mux._run_environment_scheduler(160.), 190.)
+        self.assertEqual(second.calls, [160.])
+
+        self.reactor.now = 190.
+        self.assertEqual(mux._run_environment_scheduler(190.), 220.)
+        self.assertEqual(first.calls, [130., 190.])
+
     def test_five_failed_automatic_resets_stop_i2c_attempts(self):
         responses = []
         for ignored in range(5):
