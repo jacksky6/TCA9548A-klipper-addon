@@ -63,6 +63,22 @@ class FakeModernI2C:
         return None
 
 
+class FakeLegacyI2C(FakeModernI2C):
+    # Old Klipper and Kalico writes do not accept the retry keyword.
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.mcu = FakeMCU()
+
+    def i2c_write(self, data, minclock=0, reqclock=0):
+        self.calls.append((list(data), 0, None))
+        self.responses.pop(0)
+
+    def i2c_read(self, write, read_len, retry=True):
+        self.calls.append((list(write), read_len, retry))
+        return self.responses.pop(0)
+
+
 class FakeReactor:
     NEVER = -1.
     NOW = 0.
@@ -70,6 +86,9 @@ class FakeReactor:
     def __init__(self):
         self.now = 0.
         self.updated_timer = None
+        self.timers = []
+        self.unregistered_timers = []
+        self._timer_id = 0
 
     def monotonic(self):
         return self.now
@@ -79,7 +98,14 @@ class FakeReactor:
         return waketime
 
     def register_timer(self, callback):
-        return callback
+        self._timer_id += 1
+        timer = (self._timer_id, callback)
+        self.timers.append(timer)
+        return timer
+
+    def unregister_timer(self, timer):
+        self.unregistered_timers.append(timer)
+        self.timers.remove(timer)
 
     def update_timer(self, timer, waketime):
         self.updated_timer = (timer, waketime)
@@ -214,6 +240,16 @@ def success(response=None):
     return {"i2c_bus_status": "SUCCESS", "response": response or []}
 
 
+def initialization_responses():
+    # T1=27504, T2=26435, T3=-1000; H1=117, H2=362, H3=0,
+    # H4=819, H5=1, H6=0. Pressure calibration is deliberately unused.
+    calibration = [0x70, 0x6B, 0x43, 0x67, 0x18, 0xFC] + [0] * 19 + [117]
+    cal2 = [0x6A, 0x01, 0, 0x33, 0x13, 0, 0] + [0] * 9
+    return [success([0x60]), success(), success([0]),
+            success(calibration), success(cal2), success(), success(),
+            success()]
+
+
 def _load_driver_modules():
     for name in list(sys.modules):
         if name == "klippy" or name.startswith("klippy."):
@@ -225,64 +261,6 @@ def _load_driver_modules():
     bus.MCU_I2C_from_config = None
     sys.modules[bus.__name__] = bus
 
-    class NativeBME280:
-        def __init__(self, config):
-            self.printer = config.get_printer()
-            self.name = config.get_name().split()[-1]
-            self.reactor = self.printer.get_reactor()
-            self.i2c = bus.MCU_I2C_from_config(config, default_addr=0x76,
-                                                default_speed=100000)
-            self.mcu = self.i2c.get_mcu()
-            self.os_pres = config.getint("bme280_oversample_pressure", 2)
-            self.temp = self.humidity = self.pressure = 0.
-            self.min_temp = self.max_temp = 0.
-            self._callback = None
-            self.chip_type = "BME280"
-            self.sample_timer = None
-            self.printer.register_event_handler("klippy:connect",
-                                                self.handle_connect)
-
-        def _init_bmxx80(self):
-            self.initialized_pressure_oversample = self.os_pres
-            self.i2c.i2c_write([0xE0, 0xB6])
-            self.sample_timer = self.reactor.register_timer(
-                self._sample_bme280)
-
-        def read_register(self, register, read_len):
-            if register != "TEMP_MSB":
-                raise AssertionError("unexpected register: %s" % (register,))
-            params = self.i2c.i2c_read([0xFA], read_len)
-            return bytearray(params["response"])
-
-        def _compensate_temp(self, raw_temp):
-            return 24.
-
-        def _compensate_humidity_bme280(self, raw_humidity):
-            return 45.
-
-        def _compensate_pressure_bme280(self, raw_pressure):
-            raise AssertionError("pressure compensation must not be called")
-
-        def _sample_bme280(self, eventtime):
-            raise AssertionError("native BME280 sampling must not be called")
-
-        def setup_minmax(self, min_temp, max_temp):
-            self.min_temp = min_temp
-            self.max_temp = max_temp
-
-        def setup_callback(self, callback):
-            self._callback = callback
-
-        def get_status(self, eventtime):
-            return {"temperature": round(self.temp, 2),
-                    "humidity": self.humidity, "pressure": self.pressure}
-
-    bme280 = types.ModuleType("klippy.extras.bme280")
-    bme280.BME280 = NativeBME280
-    sys.modules[bme280.__name__] = bme280
-    sht3x = types.ModuleType("klippy.extras.sht3x")
-    sht3x.SHT3X = type("SHT3X", (), {})
-    sys.modules[sht3x.__name__] = sht3x
     core = _load_module("klippy.extras.tca9548a", REPOSITORY / "tca9548a.py")
     _load_module("klippy.extras.tca9548a_drivers.recovery",
                  REPOSITORY / "tca9548a_drivers" / "recovery.py")
@@ -299,11 +277,15 @@ class BME280RecoveryTests(unittest.TestCase):
         self.printer = FakePrinter(self.reactor, self.mux)
         self.config = FakeConfig(self.printer)
 
-    def _make_sensor(self, responses):
-        raw_i2c = FakeModernI2C(responses)
+    def _make_sensor(self, responses, stub_compensation=True,
+                     i2c_type=FakeModernI2C):
+        raw_i2c = i2c_type(responses)
         self.bus.MCU_I2C_from_config = lambda *args, **kwargs: raw_i2c
         sensor = self.driver.BME280TCA9548A(self.config)
         sensor.setup_minmax(-50., 100.)
+        if stub_compensation:
+            sensor._compensate_temp = lambda raw: 24.
+            sensor._compensate_humidity = lambda raw: 45.
         published = []
         sensor.setup_callback(
             lambda print_time, temp: published.append((print_time, temp)))
@@ -311,17 +293,16 @@ class BME280RecoveryTests(unittest.TestCase):
 
     def test_failed_sample_retries_without_pressure_compensation(self):
         sensor, published = self._make_sensor([
-            success(),  # initialization
+            *initialization_responses(),
             success([0] * 5),  # initial sample
             {"i2c_bus_status": "START_NACK", "response": []},
-            success(),  # retry initialization
+            *initialization_responses(),
             success([0] * 5),  # retry sample
         ])
         sensor.handle_connect()
         sensor.handle_ready()
         self.assertTrue(sensor.valid)
         self.assertEqual((sensor.temp, sensor.humidity), (24., 45.))
-        self.assertEqual(sensor.initialized_pressure_oversample, 0)
 
         self.reactor.now = 100.
         retry_at = sensor._sample_bme280(100.)
@@ -342,13 +323,13 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertEqual(self.printer.gcode.responses, [
             "TCA9548A BME280 chamber: recovered",
         ])
-        self.assertEqual(published, [(0., 24.), (160., 24.)])
+        self.assertEqual(published, [(0.58, 24.), (160.58, 24.)])
 
     def test_error_value_options_zero_only_selected_values(self):
         self.mux.zero_temperature_on_error = True
         self.mux.zero_humidity_on_error = False
         sensor, published = self._make_sensor([
-            success(),
+            *initialization_responses(),
             success([0] * 5),
             {"i2c_bus_status": "NACK", "response": []},
         ])
@@ -358,11 +339,11 @@ class BME280RecoveryTests(unittest.TestCase):
         sensor._sample_bme280(20.)
 
         self.assertEqual((sensor.temp, sensor.humidity), (0., 45.))
-        self.assertEqual(published, [(0., 24.), (20., 0.)])
+        self.assertEqual(published, [(0.58, 24.), (20., 0.)])
 
     def test_status_matches_aht_without_pressure(self):
         sensor, _ = self._make_sensor([
-            success(),
+            *initialization_responses(),
             success([0] * 5),
         ])
         sensor.handle_connect()
@@ -377,14 +358,14 @@ class BME280RecoveryTests(unittest.TestCase):
 
     def test_initialization_and_sampling_disable_host_retries(self):
         sensor, _ = self._make_sensor([
-            success(),
+            *initialization_responses(),
             success([0] * 5),
         ])
 
         sensor.handle_connect()
 
         calls = sensor.i2c.i2c.i2c_transfer_cmd.calls
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 9)
         self.assertTrue(all(call[1]["retry"] is False for call in calls))
 
     def test_stopped_sensor_does_not_schedule_another_sample(self):
@@ -412,7 +393,7 @@ class BME280RecoveryTests(unittest.TestCase):
     def test_initialization_failure_retries_without_shutdown(self):
         sensor, published = self._make_sensor([
             {"i2c_bus_status": "NACK", "response": []},
-            success(),
+            *initialization_responses(),
             success([0] * 5),
         ])
 
@@ -425,11 +406,21 @@ class BME280RecoveryTests(unittest.TestCase):
         self.reactor.now = 30.
         self.assertGreater(sensor._sample_bme280(30.), 30.)
         self.assertTrue(sensor.valid)
-        self.assertEqual(published, [(30., 24.)])
+        self.assertEqual(published, [(30.58, 24.)])
+
+    def test_reinitialization_reuses_single_sample_timer(self):
+        sensor, _ = self._make_sensor(initialization_responses() * 2)
+        timer = sensor.sample_timer
+        with self.mux.session(close_on_exit=True):
+            self.assertTrue(sensor._initialize_sensor())
+            self.assertTrue(sensor._initialize_sensor())
+        self.assertIs(sensor.sample_timer, timer)
+        self.assertEqual(len(self.reactor.unregistered_timers), 0)
+        self.assertEqual(self.reactor.timers.count(timer), 1)
 
     def test_malformed_sample_retries_without_losing_valid_values(self):
         sensor, published = self._make_sensor([
-            success(),
+            *initialization_responses(),
             success([0] * 5),
             success([255]),
         ])
@@ -441,7 +432,77 @@ class BME280RecoveryTests(unittest.TestCase):
         self.assertFalse(sensor.valid)
         self.assertEqual((sensor.temp, sensor.humidity), (24., 45.))
         self.assertEqual(sensor.last_error["type"], "BME280MeasurementError")
-        self.assertEqual(published, [(0., 24.)])
+        self.assertEqual(published, [(0.58, 24.)])
+
+    def test_real_calibration_and_compensation_on_both_protocols(self):
+        for transport in (FakeModernI2C, FakeLegacyI2C):
+            with self.subTest(transport=transport.__name__):
+                self.reactor.now = 0.
+                sensor, published = self._make_sensor([
+                    *initialization_responses(),
+                    # Bosch temperature example: raw T=519888; raw H=60000.
+                    success([0x7E, 0xED, 0, 0xEA, 0x60]),
+                ], stub_compensation=False, i2c_type=transport)
+                sensor.handle_connect()
+                self.assertTrue(sensor.valid)
+                self.assertEqual(sensor.dig["T3"], -1000)
+                self.assertEqual(sensor.dig["H4"], 819)
+                self.assertEqual(sensor.dig["H5"], 1)
+                self.assertFalse(any(k.startswith("P") for k in sensor.dig))
+                self.assertAlmostEqual(sensor.temp, 25.08247793, places=6)
+                self.assertGreater(sensor.humidity, 0.)
+                self.assertLess(sensor.humidity, 100.)
+                self.assertEqual(published, [(0.58, sensor.temp)])
+                if transport is FakeLegacyI2C:
+                    calls = sensor.i2c.i2c.calls
+                    self.assertEqual(len(calls), 9)
+                    self.assertTrue(all(retry is False for _, length, retry
+                                        in calls if length))
+                    self.assertFalse(sensor.get_status(0.)[
+                        "i2c_status_supported"])
+                else:
+                    calls = sensor.i2c.i2c.i2c_transfer_cmd.calls
+                    writes = [args[1] for args, _ in calls if not args[2]]
+                    self.assertIn([0xF4, 0x43], writes)
+                    self.assertEqual(calls[-1][0][1:], [[0xFA], 5])
+
+    def test_nvm_busy_is_checked_once_then_retried_next_period(self):
+        sensor, _ = self._make_sensor([
+            success([0x60]), success(), success([1]),
+            *initialization_responses(), success([0] * 5),
+        ])
+        sensor.handle_connect()
+        self.assertEqual(len(sensor.i2c.i2c.i2c_transfer_cmd.calls), 3)
+        self.assertFalse(sensor._initialized)
+        self.assertEqual(sensor.consecutive_failure_count, 1)
+        self.assertEqual(self.printer.shutdowns, [])
+        self.reactor.now = 30.
+        sensor._sample_bme280(30.)
+        self.assertTrue(sensor.valid)
+        self.assertEqual(sensor.consecutive_failure_count, 0)
+
+    def test_unsupported_chip_and_malformed_calibration_are_recoverable(self):
+        bad_calibration = initialization_responses()
+        bad_calibration[3] = success([0])
+        for responses in ([success([0x58])], bad_calibration):
+            with self.subTest(responses=responses):
+                sensor, published = self._make_sensor(responses)
+                sensor.handle_connect()
+                self.assertFalse(sensor._initialized)
+                self.assertEqual(published, [])
+                self.assertEqual(self.printer.shutdowns, [])
+
+    def test_invalid_measurement_sentinel_preserves_last_values(self):
+        sensor, published = self._make_sensor([
+            *initialization_responses(), success([0] * 5),
+            success([0x80, 0, 0, 0, 0]),
+        ])
+        sensor.handle_connect()
+        self.reactor.now = 20.
+        self.assertEqual(sensor._sample_bme280(20.), 80.)
+        self.assertFalse(sensor.valid)
+        self.assertEqual((sensor.temp, sensor.humidity), (24., 45.))
+        self.assertEqual(len(published), 1)
 
     def test_driver_rejects_sensor_level_error_value_option(self):
         config = FakeConfig(self.printer, {"zero_humidity_on_error": True})

@@ -457,9 +457,10 @@ from downstream devices.
 <a id="environment-recovery"></a>
 ### Environment Sensor I2C Recovery
 
-`AHT1X_TCA9548A`, `AHT2X_TCA9548A`, and `AHT3X_TCA9548A` use the add-on's
-standalone `tca9548a_drivers/aht.py` driver. `BME280_TCA9548A` and
-`SHT3X_TCA9548A` use the installed Klipper/Kalico setup paths where applicable,
+`AHT1X_TCA9548A`, `AHT2X_TCA9548A`, `AHT3X_TCA9548A`, and
+`BME280_TCA9548A` use standalone drivers in `tca9548a_drivers/`. The
+`SHT3X_TCA9548A` driver currently uses the installed Klipper/Kalico setup path
+where applicable,
 with add-on-controlled sampling, recovery, and the same recoverable mux
 transport. No Klipper/Kalico source changes are required.
 
@@ -552,9 +553,9 @@ unset.
 ## Scope and Limits
 
 Only the five temperature and humidity sensor types listed in
-[Configuration](#configuration) are supported. The AHT family uses the
-standalone `tca9548a_drivers/aht.py` driver; BME280 and SHT3X use the installed
-Klipper/Kalico drivers with this add-on's mux transport. All adapters re-select
+[Configuration](#configuration) are supported. The AHT family and BME280 use
+standalone drivers in `tca9548a_drivers/`; SHT3X uses the installed
+Klipper/Kalico driver with this add-on's mux transport. All adapters re-select
 the TCA9548A channel before each I2C operation, so they do not rely on mux
 state across reactor pauses.
 
