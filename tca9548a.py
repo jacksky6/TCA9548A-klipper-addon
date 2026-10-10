@@ -48,6 +48,8 @@ DEFAULT_RESET_PULSE_TIME = .010
 DEFAULT_RESET_SETTLE_TIME = .010
 DEFAULT_RESET_RECOVERY_COOLDOWN = 30.
 TOOLCHANGE_DETECTION_DELAY = 30.
+ENVIRONMENT_STARTUP_DELAY = 1.
+ENVIRONMENT_STARTUP_INTERVAL = 1.
 # Automatic mux reset stops after one failure group. Environment sensors use
 # three groups before stopping their own sampling.
 RECOVERY_FAILURE_GROUP_SIZE = 5
@@ -283,6 +285,8 @@ class TCA9548A:
         self._environment_scheduler_epoch = None
         self._environment_scheduler_index = 0
         self._environment_scheduler_cycle = 0
+        self._environment_scheduler_startup = False
+        self._environment_scheduler_startup_index = 0
         self.manual_environment_sampling_paused = False
         self._print_stats = None
         self._afc = None
@@ -318,12 +322,18 @@ class TCA9548A:
         if not self.debug_no_disable:
             self.disable_all()
         self._build_environment_schedule()
-        self._environment_scheduler_epoch = self.reactor.monotonic()
+        self._environment_scheduler_epoch = None
         self._environment_scheduler_index = 0
         self._environment_scheduler_cycle = 0
+        self._environment_scheduler_startup = bool(
+            self.environment_schedule_order)
+        self._environment_scheduler_startup_index = 0
+        startup_waketime = (self.reactor.monotonic() +
+                            ENVIRONMENT_STARTUP_DELAY)
         self.reactor.update_timer(
             self._environment_scheduler_timer,
-            self._next_environment_waketime())
+            startup_waketime if self._environment_scheduler_startup
+            else self.reactor.NEVER)
 
     def _handle_ready(self):
         self.reactor.update_timer(
@@ -447,6 +457,26 @@ class TCA9548A:
         sensors = self.environment_schedule_order
         if not sensors:
             return self.reactor.NEVER
+        if getattr(self, "_environment_scheduler_startup", False):
+            sensor = sensors[self._environment_scheduler_startup_index]
+            try:
+                sensor.sample_environment(eventtime)
+            except Exception:
+                logging.exception("TCA9548A '%s': startup environment "
+                                  "sampling failed for %s", self.name,
+                                  sensor.name)
+            self._environment_scheduler_startup_index += 1
+            if (self._environment_scheduler_startup_index < len(sensors)):
+                # Schedule from completion so a slow sensor cannot compress
+                # the one-second startup spacing for the next sensor.
+                return (self.reactor.monotonic() +
+                        ENVIRONMENT_STARTUP_INTERVAL)
+            self._environment_scheduler_startup = False
+            self._environment_scheduler_startup_index = 0
+            self._environment_scheduler_epoch = self.reactor.monotonic()
+            self._environment_scheduler_index = 0
+            self._environment_scheduler_cycle = 0
+            return self._next_environment_waketime()
         sensor = sensors[self._environment_scheduler_index]
         try:
             sensor.sample_environment(eventtime)
