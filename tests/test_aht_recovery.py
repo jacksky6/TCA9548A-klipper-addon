@@ -534,6 +534,7 @@ class TcaResetTests(unittest.TestCase):
         mux.last_control = 0x10
         mux.last_channel = 4
         mux._reported_i2c_failures = set()
+        mux._last_control_error = None
         mux.gcode = FakeTcaGCode()
         return mux
 
@@ -708,6 +709,114 @@ class TcaResetTests(unittest.TestCase):
             "!! TCA9548A mux0: NO_RESPONSE; hardware reset",
         ])
 
+    def test_failed_retry_after_verified_reset_waits_for_next_round(self):
+        mux = self._make_mux(responses=[
+            {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+            success([0]),
+            {"i2c_bus_status": "START_NACK", "response": []},
+            success(),
+        ])
+
+        self.assertFalse(mux._write_control_locked(0x04))
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.auto_reset_failure_count, 1)
+        self.assertEqual(mux.last_reset_result,
+                         "verified")
+        self.assertAlmostEqual(mux._get_i2c_pause_remaining(), 60.)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
+
+        # The pause prevents another reset or control transfer in this round.
+        self.assertFalse(mux._write_control_locked(0x04))
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
+
+        self.reactor.now = mux._i2c_pause_until
+        self.assertTrue(mux._write_control_locked(0x04))
+        self.assertEqual(mux.auto_reset_failure_count, 0)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 4)
+
+    def test_five_failed_retries_after_verified_resets_stop_recovery(self):
+        responses = []
+        for ignored in range(5):
+            responses.extend([
+                {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+                success([0]),
+                {"i2c_bus_status": "START_NACK", "response": []},
+            ])
+        mux = self._make_mux(responses=responses)
+
+        for attempt in range(5):
+            self.assertFalse(mux._write_control_locked(0x04))
+            if attempt != 4:
+                self.reactor.now = mux._i2c_pause_until
+
+        self.assertEqual(mux.reset_count, 5)
+        self.assertEqual(mux.auto_reset_failure_count, 5)
+        self.assertTrue(mux._automatic_recovery_stopped())
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 15)
+        self.assertIn("after 5 failed attempts", mux.gcode.raw_responses[-1])
+        self.assertIn("control retry failed: START_NACK",
+                      mux.gcode.raw_responses[-1])
+        self.assertFalse(mux._write_control_locked(0x04))
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 15)
+
+    def test_retry_readback_failure_does_not_reset_again_or_clear_count(self):
+        mux = self._make_mux(responses=[
+            {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+            success([0]), success(),
+            {"i2c_bus_status": "START_READ_NACK", "response": []},
+        ])
+        mux.verify_select = True
+        mux.reset_recovery_cooldown = 0.
+        mux.auto_reset_failure_count = 2
+
+        self.assertFalse(mux._write_control_locked(0x04))
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.auto_reset_failure_count, 3)
+        self.assertAlmostEqual(mux._get_i2c_pause_remaining(), 60.)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 4)
+
+    def test_recovery_during_select_readback_counts_one_failed_attempt(self):
+        mux = self._make_mux(responses=[
+            success(),
+            {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+            success([0]),
+            {"i2c_bus_status": "START_READ_NACK", "response": []},
+        ])
+        mux.verify_select = True
+        mux.auto_reset_failure_count = 2
+
+        self.assertFalse(mux._write_control_locked(0x04))
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.auto_reset_failure_count, 3)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 4)
+
+    def test_control_read_retry_failure_preserves_previous_failure_count(self):
+        mux = self._make_mux(responses=[
+            {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+            success([0]),
+            {"i2c_bus_status": "START_READ_NACK", "response": []},
+        ])
+        mux.auto_reset_failure_count = 2
+
+        self.assertIsNone(mux._read_control_locked())
+        self.assertEqual(mux.auto_reset_failure_count, 3)
+        self.assertAlmostEqual(mux._get_i2c_pause_remaining(), 60.)
+        self.assertIsNone(mux._read_control_locked())
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
+
+    def test_reset_can_satisfy_disable_without_an_extra_control_write(self):
+        mux = self._make_mux(responses=[
+            {"i2c_bus_status": "BUS_TIMEOUT", "response": []},
+            success([0]),
+        ])
+        mux.auto_reset_failure_count = 2
+
+        self.assertTrue(mux._write_control_locked(0))
+        self.assertEqual(mux.auto_reset_failure_count, 0)
+        self.assertEqual(mux.last_control, 0)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 2)
+
     def test_no_response_during_reset_verification_pauses_without_escaping(self):
         mux = self._make_mux(responses=[
             RuntimeError("Unable to obtain 'i2c_response' response"),
@@ -825,7 +934,7 @@ class TcaResetTests(unittest.TestCase):
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 10)
         self.assertEqual(mux.gcode.raw_responses[-1],
                          "!! TCA9548A mux0: automatic recovery stopped "
-                         "after 5 failed resets (START_READ_NACK). "
+                         "after 5 failed attempts (START_READ_NACK). "
                          "Check RESET# wiring and TCA "
                          "power; repair, then run TCA_RESET or power-cycle.")
 

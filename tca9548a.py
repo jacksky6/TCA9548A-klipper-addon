@@ -271,6 +271,7 @@ class TCA9548A:
         self._reported_select_failures = set()
         self._reported_session_access_failures = set()
         self._reported_i2c_failures = set()
+        self._last_control_error = None
         self._session_owner = None
         self._session_depth = 0
         self.environment_sensors = []
@@ -414,28 +415,42 @@ class TCA9548A:
             i2c_transfer_recoverable(
                 self.i2c, [value], operation="TCA9548A control write")
         except I2CStatusError as exc:
+            self._last_control_error = exc
             self.last_control = self.last_channel = None
             if allow_auto_reset and self._attempt_auto_reset_locked(exc):
-                return self._write_control_locked(value, allow_auto_reset=False)
+                return self._retry_control_write_locked(value)
             self._report_i2c_failure(exc)
             return False
         self._clear_i2c_pause_locked()
-        self._clear_auto_reset_failures_locked()
         self._reported_i2c_failures.clear()
         if self.select_delay:
             self.reactor.pause(self.reactor.monotonic() + self.select_delay)
         if self.verify_select:
-            control, reset_performed = self._read_control_result_locked()
+            control, reset_performed = self._read_control_result_locked(
+                allow_auto_reset=allow_auto_reset)
             if reset_performed:
+                if control is None:
+                    return False  # The failed recovery already paused I2C.
                 # The hardware reset intentionally cleared this selection.
-                # Repeat the original control write once, without recursion.
-                return self._write_control_locked(value, allow_auto_reset=False)
+                return self._retry_control_write_locked(value)
             if control != value:
                 return False
         self.last_control = value
         if value == 0:
             self.last_channel = None
+        self._clear_auto_reset_failures_locked()
+        self._last_control_error = None
         return True
+
+    def _retry_control_write_locked(self, value):
+        # Exactly one retry, including optional readback, with further resets
+        # disabled. A failed complete operation consumes one recovery attempt.
+        self._last_control_error = None
+        if self._write_control_locked(value, allow_auto_reset=False):
+            self._clear_auto_reset_failures_locked()
+            return True
+        self._record_auto_reset_retry_failure_locked()
+        return False
 
     def _write_control(self, value):
         with self.mutex:
@@ -455,12 +470,28 @@ class TCA9548A:
         self.auto_reset_failure_count += 1
         return self._automatic_recovery_stopped()
 
-    def _report_automatic_recovery_stopped(self):
-        reason = (self.last_reset_result or "unknown").replace(
+    def _record_auto_reset_retry_failure_locked(self):
+        error = self._last_control_error
+        status = getattr(error, "status", "control verification failed")
+        self._pause_i2c_locked()
+        if self._record_auto_reset_failure_locked():
+            self._clear_i2c_pause_locked()
+            self._report_automatic_recovery_stopped(
+                "control retry failed: %s" % status)
+            return
+        remaining = self._get_i2c_pause_remaining()
+        message = (
+            "TCA9548A %s: reset verified; control retry failed (%s); "
+            "I2C paused for %.0fs" % (self.name, status, remaining))
+        logging.error(message)
+        self._respond_error(message)
+
+    def _report_automatic_recovery_stopped(self, reason=None):
+        reason = (reason or self.last_reset_result or "unknown").replace(
             "verification failed: ", "", 1)
         message = (
             "TCA9548A %s: automatic recovery stopped after %d failed "
-            "resets (%s). Check RESET# wiring and TCA power; repair, then "
+            "attempts (%s). Check RESET# wiring and TCA power; repair, then "
             "run TCA_RESET or power-cycle." %
             (self.name, MAX_CONSECUTIVE_AUTO_RESET_FAILURES,
              reason))
@@ -560,7 +591,6 @@ class TCA9548A:
         self.last_control = 0
         self.last_channel = None
         self._set_reset_result("verified")
-        self._clear_auto_reset_failures_locked()
         return True
 
     def _reset_locked(self):
@@ -589,7 +619,10 @@ class TCA9548A:
 
     def reset(self):
         with self.mutex:
-            return self._reset_locked()
+            verified = self._reset_locked()
+            if verified:
+                self._clear_auto_reset_failures_locked()
+            return verified
 
     @contextmanager
     def session(self, close_on_exit=False):
@@ -647,25 +680,30 @@ class TCA9548A:
             params = i2c_transfer_recoverable(
                 self.i2c, [], 1, operation="TCA9548A control read")
         except I2CStatusError as exc:
+            self._last_control_error = exc
             self.last_control = self.last_channel = None
             if allow_auto_reset and self._attempt_auto_reset_locked(exc):
                 value, ignored = self._read_control_result_locked(
                     allow_auto_reset=False)
+                if value is None:
+                    self._record_auto_reset_retry_failure_locked()
                 return value, True
             self._report_i2c_failure(exc)
             return None, False
         self._clear_i2c_pause_locked()
-        self._clear_auto_reset_failures_locked()
         self._reported_i2c_failures.clear()
         if params is None:
             return None, False
         response = params.get("response")
         if not response:
             return None, False
+        self._last_control_error = None
         return response[0], False
 
     def _read_control_locked(self, allow_auto_reset=True):
         value, ignored = self._read_control_result_locked(allow_auto_reset)
+        if value is not None:
+            self._clear_auto_reset_failures_locked()
         return value
 
     def _read_control(self):

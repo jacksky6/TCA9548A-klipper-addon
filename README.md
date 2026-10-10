@@ -102,14 +102,17 @@ Automatic recovery requires `reset_pin` and a modern I2C protocol.
 - **No direct sensor reset:** a downstream sensor error such as `START_NACK`
   remains a sensor failure. It triggers mux recovery only if it later prevents
   access to the TCA control register.
-- **Verification failure:** TCA and downstream I2C traffic pause for one
-  `environment_report_time` interval. This avoids repeatedly submitting a
-  timeout to a stuck bus.
-- **Stop condition:** after five failed automatic reset verifications, all
+- **Recovery failure:** if reset verification or the single retry fails, TCA
+  and downstream I2C traffic pause for one `environment_report_time` interval.
+  No further reset or retry is made in that round, including by other sensors
+  on the same mux.
+- **Stop condition:** after five consecutive failed automatic recovery attempts (reset
+  verification or the one retry after a verified reset), all
   automatic TCA and downstream I2C activity stops. Repair the fault, then run
   `TCA_RESET MUX=mux1`; power-cycle the printer if the reset cannot be
-  verified. A verified reset or successful TCA control transfer clears this
-  failure count.
+  verified. A successful TCA control operation clears the failure count;
+  automatic reset verification alone does not. A verified manual `TCA_RESET`
+  also clears the count and re-enables recovery.
 
 Automatic attempts are limited to one per 30 seconds by default. The Console
 shows an error such as `TCA9548A mux1: BUS_TIMEOUT; hardware reset`, then
