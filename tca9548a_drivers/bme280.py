@@ -102,6 +102,11 @@ class BME280TCA9548A(EnvironmentRecoveryMixin):
         if (self._sampling_stopped()
                 or self._stop_sampling_if_printer_shutdown()):
             return
+        if self._mux.should_pause_environment_sampling(
+                self.reactor.monotonic()):
+            self.reactor.update_timer(
+                self.sample_timer, self._mux.get_environment_waketime(self))
+            return
         with self._mux.session(close_on_exit=True):
             if self._initialize_sensor():
                 self._sample_initialized()

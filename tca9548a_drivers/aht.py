@@ -79,6 +79,11 @@ class AHTBase(EnvironmentRecoveryMixin):
         if (self._sampling_stopped()
                 or self._stop_sampling_if_printer_shutdown()):
             return
+        if self._mux.should_pause_environment_sampling(
+                self.reactor.monotonic()):
+            self.reactor.update_timer(
+                self.sample_timer, self._mux.get_environment_waketime(self))
+            return
         if self._debug_skip_init:
             logging.info("%s %s: debug_skip_init enabled, skipping sensor init",
                          self.model, self.name)

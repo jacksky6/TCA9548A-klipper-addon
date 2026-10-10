@@ -348,7 +348,16 @@ class TCA9548A:
         return state is not None and state != "Idle"
 
     def should_pause_environment_sampling(self, eventtime):
-        """Return whether manual or print-time sampling suppression is active."""
+        """Return whether an environment sample must be skipped.
+
+        A recovery pause or a stopped automatic recovery makes the mux
+        unavailable. Sensors must skip before opening a mux session so these
+        states do not become sensor-level communication failures.
+        """
+        if self._get_i2c_pause_remaining() > 0.:
+            return True
+        if self._automatic_recovery_stopped():
+            return True
         if self.manual_environment_sampling_paused:
             return True
         if (not self.pause_env_on_toolchange

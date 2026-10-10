@@ -953,6 +953,22 @@ class TcaResetTests(unittest.TestCase):
         self.assertTrue(mux._write_control_locked(0x04))
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
 
+    def test_environment_sampling_skips_during_mux_recovery_pause(self):
+        mux = self._make_mux()
+        mux._i2c_pause_until = 60.
+        self.reactor.now = 30.
+
+        self.assertTrue(mux.should_pause_environment_sampling(30.))
+
+        self.reactor.now = 60.
+        self.assertFalse(mux.should_pause_environment_sampling(60.))
+
+    def test_environment_sampling_skips_after_mux_recovery_stops(self):
+        mux = self._make_mux()
+        mux.auto_reset_failure_count = 5
+
+        self.assertTrue(mux.should_pause_environment_sampling(0.))
+
     def test_five_failed_automatic_resets_stop_i2c_attempts(self):
         responses = []
         for ignored in range(5):
