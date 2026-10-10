@@ -434,6 +434,18 @@ class TCA9548A:
                 # The hardware reset intentionally cleared this selection.
                 return self._retry_control_write_locked(value)
             if control != value:
+                # A successful write followed by an unexpected read-back is
+                # still a TCA control failure. Treat it like a transfer error
+                # so an enabled reset pin can recover an inconsistent mux.
+                mismatch = I2CStatusError(
+                    self.i2c, "CONTROL_MISMATCH",
+                    "TCA9548A control readback", 1, 1)
+                self._last_control_error = mismatch
+                self.last_control = self.last_channel = None
+                if (allow_auto_reset and
+                        self._attempt_auto_reset_locked(mismatch)):
+                    return self._retry_control_write_locked(value)
+                self._report_i2c_failure(mismatch)
                 return False
         self.last_control = value
         if value == 0:

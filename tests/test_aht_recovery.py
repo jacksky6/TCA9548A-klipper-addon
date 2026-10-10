@@ -881,6 +881,45 @@ class TcaResetTests(unittest.TestCase):
         self.assertEqual(mux.last_control, 0x04)
         self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 6)
 
+    def test_select_readback_mismatch_triggers_hardware_reset(self):
+        mux = self._make_mux(responses=[
+            success(),
+            success([0]),
+            success([0]),
+            success(),
+            success([4]),
+        ])
+        mux.verify_select = True
+        mux.reset_recovery_cooldown = 0.
+
+        self.assertTrue(mux._write_control_locked(0x04))
+
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.auto_reset_failure_count, 0)
+        self.assertEqual(mux.last_control, 0x04)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 5)
+        self.assertIn("CONTROL_MISMATCH", mux.gcode.raw_responses[0])
+
+    def test_select_readback_mismatch_retry_is_not_reset_again(self):
+        mux = self._make_mux(responses=[
+            success(),
+            success([0]),
+            success([0]),
+            success(),
+            success([0]),
+        ])
+        mux.verify_select = True
+        mux.reset_recovery_cooldown = 0.
+
+        self.assertFalse(mux._write_control_locked(0x04))
+
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.auto_reset_failure_count, 1)
+        self.assertAlmostEqual(mux._get_i2c_pause_remaining(), 60.)
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 5)
+
     def test_reset_cooldown_prevents_repeated_hardware_pulses(self):
         mux = self._make_mux()
         mux.last_reset_time = 0.

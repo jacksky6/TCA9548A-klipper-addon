@@ -96,9 +96,10 @@ wiring after Klipper has started.
 
 Automatic recovery requires `reset_pin` and a modern I2C protocol.
 
-- **Trigger:** a TCA control-register transfer returns an I2C error, or the
-  host does not receive `i2c_response` (`NO_RESPONSE`). The original TCA
-  operation is retried once after a verified reset.
+- **Trigger:** a TCA control-register transfer returns an I2C error, the host
+  does not receive `i2c_response` (`NO_RESPONSE`), or `verify_select: True`
+  reads back a control value different from the value just written. The
+  original TCA operation is retried once after a verified reset.
 - **No direct sensor reset:** a downstream sensor error such as `START_NACK`
   remains a sensor failure. It triggers mux recovery only if it later prevents
   access to the TCA control register.
@@ -539,7 +540,9 @@ AHT2X sensor. After Klipper reaches ready state, use the commands in
 `select_delay` waits after each mux write. It defaults to `0`, because the
 TCA9548A normally does not need a command processing delay. `verify_select`
 reads the control register after each write and only reports success if the
-read-back byte matches the requested channel mask.
+read-back byte matches the requested channel mask. When enabled, a mismatch
+is treated as a TCA control failure and can trigger the configured automatic
+hardware reset; the default is `False`.
 
 `debug_no_disable` defaults to `False`. When it is `False`, the plugin writes
 `0x00` to the TCA9548A during Klipper startup to disable all mux channels before
