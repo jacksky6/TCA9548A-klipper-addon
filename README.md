@@ -268,9 +268,9 @@ SHT3X_TCA9548A
 
 ### Configuration Reference
 
-The following is a reference showing several supported sensor types. Select
-only the sections that match your installed hardware, then adjust the mux
-settings, channel numbers, I2C addresses, and temperature limits accordingly.
+The following examples show one configuration for each supported sensor family.
+Keep only the sensors you use, then adjust the mux name, channel, I2C address,
+and temperature limits for your hardware.
 
 ```ini
 [tca9548a mux1]
@@ -294,14 +294,6 @@ environment_report_time: 120
 # reset_settle_time: 0.010         # default: 10 ms
 # reset_recovery_cooldown: 30      # default: 30 s
 
-[temperature_sensor Lane_0]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 0
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
 [temperature_sensor Lane_1]
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
@@ -310,34 +302,10 @@ i2c_address: 56
 min_temp: -20
 max_temp: 80
 
-[temperature_sensor Lane_2]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 2
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
-[temperature_sensor Lane_3]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 3
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
-[temperature_sensor Lane_4]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 4
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
 [temperature_sensor Chamber_BME]
 sensor_type: BME280_TCA9548A
 tca9548a: mux1
-tca9548a_channel: 5
+tca9548a_channel: 2
 i2c_address: 118
 min_temp: -20
 max_temp: 80
@@ -345,7 +313,7 @@ max_temp: 80
 [temperature_sensor Chamber_SHT]
 sensor_type: SHT3X_TCA9548A
 tca9548a: mux1
-tca9548a_channel: 6
+tca9548a_channel: 3
 i2c_address: 68
 min_temp: -20
 max_temp: 80
@@ -361,13 +329,10 @@ of `i2c_mcu`, `i2c_bus`, `i2c_speed`, and software-I2C pins for every device
 behind the mux. Any of those options in a downstream sensor section are
 ignored. The example uses `EMU_1` and `i2c1_PB6_PB7`.
 
-`environment_report_time` sets the polling interval, in seconds, for
-environment sensors on that mux. It defaults to `120`. TCA9548A AHT sensor
-sections intentionally do not support `aht10_report_time`; set the shared
-polling interval on the mux so all lanes can be scheduled together.
-`BME280_TCA9548A` follows the same rule and does not support per-sensor
-`bme280_report_time`. `SHT3X_TCA9548A` also uses the mux interval and does not
-support per-sensor `sht3x_report_time`.
+`environment_report_time` sets the polling interval, in seconds, for all
+environment sensors connected to that mux. It defaults to `120`. Set this
+option only in the mux section; individual temperature sensor sections do not
+have their own polling interval.
 
 `pause_env_on_toolchange` defaults to `False`. When set to `True`, the add-on
 waits 30 seconds after Klipper is ready, then detects loaded AFC and Happy Hare
@@ -386,9 +351,8 @@ in the `[tca9548a ...]` mux section; individual `[temperature_sensor ...]`
 sections do not support them. A failure-generated zero is not checked against
 `min_temp` or `max_temp`.
 
-At Klipper startup, each mux logs its environment scheduler plan. Sensors on the
-same mux are spread evenly across `environment_report_time` by one shared
-scheduler, which keeps their periodic polls from drifting together.
+Sensors connected to the same mux are sampled automatically at staggered times,
+so they do not all use the I2C bus at once.
 
 <a id="operation"></a>
 ## Operation
@@ -469,9 +433,9 @@ Klipper/Kalico source.
 
 #### Sampling and Retry
 
-With a modern host and matching MCU firmware, a failed initialization or sample
-marks that reading invalid and retries full initialization at the next shared
-`environment_report_time`. A successful retry makes the reading valid again.
+When a supported sensor cannot be read, its value is marked invalid and the
+add-on tries again at the next sampling time. A successful retry makes the
+reading valid again.
 
 - Each recoverable I2C operation is sent once with host-side retry disabled.
 - AHT and SHT3X make one measurement attempt per scheduled sample. An AHT

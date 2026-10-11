@@ -225,8 +225,8 @@ SHT3X_TCA9548A
 
 ### 配置参考
 
-以下参考涵盖多个支持的传感器类型。只保留与实际硬件相符的段落，并按硬件调整复用器
-设置、通道号、I2C 地址和温度范围。
+以下示例每种传感器各列出一个配置。只保留实际使用的传感器，并按硬件调整复用器名称、
+通道号、I2C 地址和温度范围。
 
 ```ini
 [tca9548a mux1]
@@ -249,14 +249,6 @@ environment_report_time: 120
 # reset_settle_time: 0.010         # 默认：10 ms
 # reset_recovery_cooldown: 30      # 默认：30 s
 
-[temperature_sensor Lane_0]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 0
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
 [temperature_sensor Lane_1]
 sensor_type: AHT2X_TCA9548A
 tca9548a: mux1
@@ -265,34 +257,10 @@ i2c_address: 56
 min_temp: -20
 max_temp: 80
 
-[temperature_sensor Lane_2]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 2
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
-[temperature_sensor Lane_3]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 3
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
-[temperature_sensor Lane_4]
-sensor_type: AHT2X_TCA9548A
-tca9548a: mux1
-tca9548a_channel: 4
-i2c_address: 56
-min_temp: -20
-max_temp: 80
-
 [temperature_sensor Chamber_BME]
 sensor_type: BME280_TCA9548A
 tca9548a: mux1
-tca9548a_channel: 5
+tca9548a_channel: 2
 i2c_address: 118
 min_temp: -20
 max_temp: 80
@@ -300,7 +268,7 @@ max_temp: 80
 [temperature_sensor Chamber_SHT]
 sensor_type: SHT3X_TCA9548A
 tca9548a: mux1
-tca9548a_channel: 6
+tca9548a_channel: 3
 i2c_address: 68
 min_temp: -20
 max_temp: 80
@@ -314,10 +282,8 @@ max_temp: 80
 引脚设置的唯一来源；下游传感器段中同名的设置会被忽略。示例使用
 `EMU_1` 与 `i2c1_PB6_PB7`。
 
-`environment_report_time` 是该复用器下环境传感器的轮询间隔，单位秒，默认为 `120`。
-TCA9548A AHT 传感器段刻意不支持 `aht10_report_time`；请在复用器段设置共享轮询间隔，
-以便一起调度所有通道。`BME280_TCA9548A` 不支持单传感器 `bme280_report_time`，
-`SHT3X_TCA9548A` 也使用复用器间隔，不支持单传感器 `sht3x_report_time`。
+`environment_report_time` 是该复用器下所有环境传感器的轮询间隔，单位为秒，默认为 `120`。
+只需在复用器段设置这一项，单独的温湿度传感器段不设置轮询间隔。
 
 `pause_env_on_toolchange` 默认为 `False`。设为 `True` 后，扩展会在 Klipper
 ready 30 秒后一次性检测已加载的 AFC 和 Happy Hare 对象，并将结果记录到
@@ -332,8 +298,7 @@ ready 30 秒后一次性检测已加载的 AFC 和 Happy Hare 对象，并将结
 `[tca9548a ...]` 复用器段，不支持在单独的 `[temperature_sensor ...]` 段设置。由失败
 产生的零值不会参与 `min_temp` 或 `max_temp` 检查。
 
-Klipper 启动时，每个复用器会记录环境传感器调度计划。同一复用器下的传感器由一个共享
-调度器在 `environment_report_time` 内均匀错开，避免长期运行后周期轮询逐渐集中到同一时刻。
+同一复用器下的传感器会自动错开采样，避免同时占用 I2C 总线。
 
 <a id="operation"></a>
 ## 运行
@@ -400,8 +365,7 @@ TCA_STATUS MUX=mux1
 
 #### 采样与重试
 
-使用新版主机和匹配 MCU 固件时，初始化或采样失败会将该读数标为无效，并在下一个共享的
-`environment_report_time` 重试完整初始化；重试成功后读数重新有效。
+传感器读取失败时，该读数会标记为无效，并在下一次采样时自动重试；重试成功后读数恢复有效。
 
 - 每个可恢复 I2C 操作只执行一次，并关闭主机层重试。
 - AHT 与 SHT3X 每个计划周期只测量一次。AHT 返回 busy 或 SHT3X 获取失败时，本次直接
