@@ -153,7 +153,7 @@ def i2c_transfer_recoverable(i2c, write, read_len=0, minclock=0,
         if "Unable to obtain 'i2c_response' response" not in str(exc):
             raise
         raise I2CResponseError(i2c, operation, len(write), read_len, exc)
-    if params is None:
+    if not isinstance(params, dict):
         raise I2CStatusError(i2c, "MALFORMED_RESPONSE", operation,
                              len(write), read_len)
     status = params.get("i2c_bus_status", "MALFORMED_RESPONSE")
@@ -695,7 +695,8 @@ class TCA9548A:
             logging.error("TCA9548A '%s': reset verification failed: %s",
                           self.name, exc)
             return False
-        response = params.get("response") if params is not None else None
+        response = (params.get("response")
+                    if isinstance(params, dict) else None)
         if not response or response[0] != 0:
             self.last_control = self.last_channel = None
             self._set_reset_result("verification failed: control is not 0x00")
@@ -795,25 +796,32 @@ class TCA9548A:
             params = i2c_transfer_recoverable(
                 self.i2c, [], 1, operation="TCA9548A control read")
         except I2CStatusError as exc:
-            self._last_control_error = exc
-            self.last_control = self.last_channel = None
-            if allow_auto_reset and self._attempt_auto_reset_locked(exc):
-                value, ignored = self._read_control_result_locked(
-                    allow_auto_reset=False)
-                if value is None:
-                    self._record_auto_reset_retry_failure_locked()
-                return value, True
-            self._report_i2c_failure(exc)
-            return None, False
+            return self._handle_control_read_error_locked(
+                exc, allow_auto_reset)
+        response = params.get("response") if params is not None else None
+        if not response:
+            exc = I2CStatusError(
+                self.i2c, "MALFORMED_RESPONSE", "TCA9548A control read",
+                0, 1)
+            return self._handle_control_read_error_locked(
+                exc, allow_auto_reset)
         self._clear_i2c_pause_locked()
         self._reported_i2c_failures.clear()
-        if params is None:
-            return None, False
-        response = params.get("response")
-        if not response:
-            return None, False
         self._last_control_error = None
         return response[0], False
+
+    def _handle_control_read_error_locked(self, error, allow_auto_reset):
+        """Record a failed control read and run at most one recovery path."""
+        self._last_control_error = error
+        self.last_control = self.last_channel = None
+        if allow_auto_reset and self._attempt_auto_reset_locked(error):
+            value, ignored = self._read_control_result_locked(
+                allow_auto_reset=False)
+            if value is None:
+                self._record_auto_reset_retry_failure_locked()
+            return value, True
+        self._report_i2c_failure(error)
+        return None, False
 
     def _read_control_locked(self, allow_auto_reset=True):
         value, ignored = self._read_control_result_locked(allow_auto_reset)

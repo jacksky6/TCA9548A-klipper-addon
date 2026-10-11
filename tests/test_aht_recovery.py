@@ -305,6 +305,15 @@ class RecoverableTransportTests(unittest.TestCase):
         self.assertEqual(len(raw_i2c.i2c_transfer_cmd.calls), 1)
         self.assertFalse(raw_i2c.i2c_transfer_cmd.calls[0][1]["retry"])
 
+    def test_malformed_i2c_response_is_returned_as_recoverable_error(self):
+        raw_i2c = FakeModernI2C(["not a response"])
+
+        with self.assertRaises(self.core.I2CStatusError) as raised:
+            self.core.i2c_transfer_recoverable(raw_i2c, [0xAC],
+                                                operation="measurement")
+
+        self.assertEqual(raised.exception.status, "MALFORMED_RESPONSE")
+
     def test_legacy_write_uses_old_signature(self):
         raw_i2c = FakeLegacyI2C()
 
@@ -862,6 +871,30 @@ class TcaResetTests(unittest.TestCase):
         self.assertEqual(mux.gcode.raw_responses, [
             "!! TCA9548A mux0: NACK; hardware reset",
         ])
+
+    def test_empty_control_read_response_recovers_like_i2c_error(self):
+        mux = self._make_mux(responses=[
+            success([]),
+            success([0]),
+            success([0]),
+        ])
+
+        self.assertEqual(mux._read_control_locked(), 0)
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
+        self.assertEqual(mux.last_reset_result, "verified")
+        self.assertEqual(len(mux.i2c.i2c_transfer_cmd.calls), 3)
+
+    def test_missing_control_read_response_recovers_like_i2c_error(self):
+        mux = self._make_mux(responses=[
+            None,
+            success([0]),
+            success([0]),
+        ])
+
+        self.assertEqual(mux._read_control_locked(), 0)
+        self.assertEqual(mux.auto_reset_count, 1)
+        self.assertEqual(mux.reset_count, 1)
 
     def test_select_verification_error_reselects_after_hardware_reset(self):
         mux = self._make_mux(responses=[
